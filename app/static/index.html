@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Giao diện điều khiển test tải và quan sát hệ thống AI bằng Prometheus, Grafana và JSON logs."
+    />
+    <title>Day 13 Observability Console</title>
+    <link rel="stylesheet" href="/static/console.css?v=20260811-run-progress" />
+    <script src="/static/console.js?v=20260811-run-progress" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Trang chính Observability Console">
+        <span class="brand-mark" aria-hidden="true">D13</span>
+        <span>
+          <strong>Observability Console</strong>
+          <small>Nguyễn Gia Bảo, 2A202601938</small>
+        </span>
+      </a>
+      <nav class="topbar-actions" aria-label="Liên kết hệ thống">
+        <span class="system-state" id="api-state" data-state="loading">
+          <span class="state-dot" aria-hidden="true"></span>
+          <span>Đang kiểm tra API</span>
+        </span>
+        <a href="/docs" target="_blank" rel="noreferrer">API Docs</a>
+        <a id="prometheus-link" href="http://localhost:9090/targets" target="_blank" rel="noreferrer">Prometheus</a>
+        <a id="jaeger-link" href="http://localhost:16686" target="_blank" rel="noreferrer">Jaeger</a>
+        <a id="grafana-link" href="http://localhost:3000/d/day13-ai-observability" target="_blank" rel="noreferrer">Mở Grafana</a>
+      </nav>
+    </header>
+
+    <main class="page-shell">
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">LAB CONTROL SURFACE</p>
+        <h1 id="page-title">Quan sát. Tạo tải. Xác minh.</h1>
+        <p>Điều khiển traffic và incident ngay cạnh dashboard Grafana, không cần đổi cửa sổ terminal.</p>
+      </section>
+
+      <section class="snapshot-grid" aria-label="Snapshot hệ thống">
+        <article class="snapshot">
+          <span>Request trong process</span>
+          <strong id="metric-traffic">0</strong>
+        </article>
+        <article class="snapshot">
+          <span>Latency P95</span>
+          <strong id="metric-p95">0 ms</strong>
+        </article>
+        <article class="snapshot">
+          <span>Tổng cost</span>
+          <strong id="metric-cost">$0.0000</strong>
+        </article>
+        <article class="snapshot">
+          <span>Quality trung bình</span>
+          <strong id="metric-quality">0.00</strong>
+        </article>
+      </section>
+
+      <section class="workspace" aria-label="Khu vực điều khiển và dashboard">
+        <aside class="control-panel" aria-labelledby="control-title">
+          <div class="panel-heading">
+            <div>
+              <h2 id="control-title">Điều khiển test</h2>
+              <p>Mọi thao tác gọi trực tiếp API hiện tại.</p>
+            </div>
+            <button class="button button-quiet" id="refresh-status" type="button">Làm mới</button>
+          </div>
+
+          <div class="control-section">
+            <h3>Chạy nhanh</h3>
+            <form class="quick-run-form" id="quick-run-form">
+              <label class="field">
+                <span>Chọn bài test</span>
+                <select id="quick-preset">
+                  <option value="1">Gửi 1 request</option>
+                  <option value="10">Gửi baseline 10 request</option>
+                </select>
+              </label>
+              <button class="button button-primary" id="run-quick" type="submit">Chạy bài test đã chọn</button>
+            </form>
+            <small class="control-help" id="quick-run-help">Baseline dùng concurrency 5. Khi nút bị khóa, bấm “Dừng gửi thêm” hoặc đợi lần chạy hiện tại hoàn tất.</small>
+          </div>
+
+          <div class="control-section prompt-control">
+            <div class="prompt-control-heading">
+              <h3>Prompt versioning</h3>
+              <span id="prompt-production-version">production → …</span>
+            </div>
+            <label class="field">
+              <span>Label dùng khi gửi request</span>
+              <select id="prompt-label">
+                <option value="production">production</option>
+                <option value="baseline">baseline</option>
+                <option value="candidate">candidate</option>
+              </select>
+              <small id="prompt-selection-detail">Đang tải local prompt registry…</small>
+            </label>
+            <div class="button-grid prompt-test-buttons">
+              <button class="button button-secondary" id="test-prompt-baseline" type="button">Test baseline</button>
+              <button class="button button-secondary" id="test-prompt-candidate" type="button">Test candidate</button>
+              <button class="button button-primary" id="promote-prompt" type="button">Promote candidate</button>
+              <button class="button button-quiet" id="rollback-prompt" type="button">Rollback baseline</button>
+            </div>
+          </div>
+
+          <form class="control-section" id="stress-form">
+            <h3>Stress test tùy chỉnh</h3>
+            <div class="field-grid">
+              <label class="field">
+                <span>Tổng request</span>
+                <input id="stress-total" name="total" type="number" min="1" max="500" value="100" required />
+                <small>Tối đa 500 request mỗi lần.</small>
+              </label>
+              <label class="field">
+                <span>Concurrency</span>
+                <input id="stress-concurrency" name="concurrency" type="number" min="1" max="50" value="10" required />
+                <small>Tăng dần để tìm điểm bão hòa.</small>
+              </label>
+              <label class="field field-wide">
+                <span>Client timeout</span>
+                <div class="input-suffix">
+                  <input id="stress-timeout" name="timeout" type="number" min="1" max="120" value="30" required />
+                  <span>giây</span>
+                </div>
+                <small>Timeout phía client không đồng nghĩa server error.</small>
+              </label>
+            </div>
+            <div class="button-grid">
+              <button class="button button-primary" id="run-stress" type="submit">Bắt đầu stress test</button>
+              <button class="button button-danger" id="stop-run" type="button" disabled>Dừng gửi thêm</button>
+            </div>
+          </form>
+
+          <div class="control-section">
+            <h3>Incident injection</h3>
+            <div class="incident-list">
+              <div class="incident-row">
+                <div>
+                  <strong>RAG chậm</strong>
+                  <small>Tăng retrieval latency khoảng 2.5 giây.</small>
+                </div>
+                <button class="toggle-button" data-incident="rag_slow" type="button" aria-pressed="false">Đang tắt</button>
+              </div>
+              <div class="incident-row">
+                <div>
+                  <strong>Tool lỗi</strong>
+                  <small>Tạo HTTP 500 và tăng server error rate.</small>
+                </div>
+                <button class="toggle-button" data-incident="tool_fail" type="button" aria-pressed="false">Đang tắt</button>
+              </div>
+              <div class="incident-row">
+                <div>
+                  <strong>Cost spike</strong>
+                  <small>Tạo tình huống chi phí bất thường.</small>
+                </div>
+                <button class="toggle-button" data-incident="cost_spike" type="button" aria-pressed="false">Đang tắt</button>
+              </div>
+            </div>
+            <button class="button button-quiet button-full" id="disable-incidents" type="button">Tắt toàn bộ incident</button>
+          </div>
+
+          <div class="control-section run-summary" aria-live="polite">
+            <div class="summary-heading">
+              <h3>Kết quả lần chạy</h3>
+              <span id="run-state">Sẵn sàng</span>
+            </div>
+            <div class="run-progress" id="run-progress" data-state="idle">
+              <div class="run-progress-meta">
+                <span id="run-progress-label">Chưa có bài test</span>
+                <strong id="run-progress-percent">0%</strong>
+              </div>
+              <div
+                class="run-progress-track"
+                id="run-progress-track"
+                role="progressbar"
+                aria-label="Tiến độ bài test"
+                aria-valuemin="0"
+                aria-valuemax="1"
+                aria-valuenow="0"
+              >
+                <span id="run-progress-bar"></span>
+              </div>
+            </div>
+            <dl class="run-stats">
+              <div><dt>Đã gửi</dt><dd id="run-sent">0</dd></div>
+              <div><dt>HTTP 2xx</dt><dd id="run-success">0</dd></div>
+              <div><dt>Server lỗi</dt><dd id="run-server-error">0</dd></div>
+              <div><dt>Client lỗi</dt><dd id="run-client-error">0</dd></div>
+              <div><dt>Latency TB</dt><dd id="run-latency">0 ms</dd></div>
+              <div><dt>Đã xong</dt><dd id="run-completed">0</dd></div>
+            </dl>
+          </div>
+
+          <details class="command-reference">
+            <summary>Lệnh terminal tương đương</summary>
+            <pre><code id="command-preview">python scripts/load_test.py --concurrency 5</code></pre>
+          </details>
+        </aside>
+
+        <section class="dashboard-panel" aria-labelledby="dashboard-title">
+          <div class="panel-heading dashboard-heading">
+            <div>
+              <h2 id="dashboard-title">Grafana live dashboard</h2>
+              <p>Prometheus scrape mỗi 5 giây. Dashboard refresh mỗi 5 giây trên giao diện này.</p>
+            </div>
+            <div class="dashboard-actions">
+              <button class="button button-quiet" id="reload-dashboard" type="button">Tải lại dashboard</button>
+              <a class="button button-secondary" id="open-dashboard" href="http://localhost:3000/d/day13-ai-observability" target="_blank" rel="noreferrer">Mở toàn màn hình</a>
+            </div>
+          </div>
+          <div class="embed-frame">
+            <div class="embed-loading" id="embed-loading">
+              <strong>Đang kết nối Grafana</strong>
+              <span>Nếu khung trống, kiểm tra container Grafana và cấu hình embedding.</span>
+            </div>
+            <iframe
+              id="grafana-frame"
+              title="Dashboard Grafana Day 13 AI Observability"
+              loading="eager"
+              referrerpolicy="same-origin"
+            ></iframe>
+          </div>
+        </section>
+      </section>
+
+      <section class="event-panel" aria-labelledby="event-title">
+        <div class="panel-heading">
+          <div>
+            <h2 id="event-title">Request feed</h2>
+            <p>Hiển thị tối đa 80 kết quả gần nhất từ browser load generator.</p>
+          </div>
+          <button class="button button-quiet" id="clear-events" type="button">Xóa feed</button>
+        </div>
+        <div class="event-table-wrap">
+          <table class="event-table">
+            <thead>
+              <tr>
+                <th>Thời gian</th>
+                <th>Request</th>
+                <th>Trace</th>
+                <th>Feature</th>
+                <th>Prompt</th>
+                <th>HTTP</th>
+                <th>Client latency</th>
+                <th>Kết quả</th>
+              </tr>
+            </thead>
+            <tbody id="event-body">
+              <tr class="empty-row"><td colspan="8">Chưa có request. Chọn một bài test để bắt đầu.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="telemetry-section" aria-labelledby="telemetry-title">
+        <div class="panel-heading telemetry-heading">
+          <div>
+            <p class="eyebrow">REQUEST EVIDENCE</p>
+            <h2 id="telemetry-title">Logs và distributed traces</h2>
+            <p>JSON logs được nối với OpenTelemetry traces bằng correlation ID và trace ID.</p>
+          </div>
+          <div class="telemetry-heading-actions">
+            <button class="button button-quiet" id="refresh-telemetry" type="button">Làm mới tất cả</button>
+            <a class="button button-secondary" id="open-jaeger" href="http://localhost:16686" target="_blank" rel="noreferrer">Mở Jaeger</a>
+          </div>
+        </div>
+
+        <div class="telemetry-grid">
+          <article class="telemetry-panel" aria-labelledby="logs-title">
+            <div class="telemetry-panel-heading">
+              <div>
+                <h3 id="logs-title">Structured logs</h3>
+                <p>Tối đa 500 event mới nhất. Bấm trace/correlation ID để lọc một request; bấm <strong>Bỏ lọc</strong> để xem toàn bộ.</p>
+              </div>
+              <span class="telemetry-count" id="log-count">0 event</span>
+            </div>
+            <form class="telemetry-filters" id="log-filter-form">
+              <label>
+                <span>Correlation ID</span>
+                <input id="log-correlation-filter" name="correlation_id" placeholder="req-xxxxxxxx" autocomplete="off" />
+              </label>
+              <label>
+                <span>Trace ID</span>
+                <input id="log-trace-filter" name="trace_id" placeholder="32 ký tự hex" autocomplete="off" />
+              </label>
+              <label>
+                <span>Event</span>
+                <select id="log-event-filter" name="event">
+                  <option value="">Tất cả event</option>
+                  <option value="request_received">request_received</option>
+                  <option value="response_sent">response_sent</option>
+                  <option value="request_failed">request_failed</option>
+                  <option value="incident_enabled">incident_enabled</option>
+                  <option value="incident_disabled">incident_disabled</option>
+                  <option value="prompt_label_updated">prompt_label_updated</option>
+                  <option value="prompt_rollback">prompt_rollback</option>
+                </select>
+              </label>
+              <button class="button button-primary" type="submit">Lọc logs</button>
+              <button class="button button-quiet" id="clear-log-filters" type="button">Bỏ lọc</button>
+            </form>
+            <div class="log-stream" id="log-stream" aria-live="polite">
+              <p class="telemetry-empty">Đang đọc JSON logs...</p>
+            </div>
+          </article>
+
+          <article class="telemetry-panel" aria-labelledby="traces-title">
+            <div class="telemetry-panel-heading">
+              <div>
+                <h3 id="traces-title">OpenTelemetry traces</h3>
+                <p>Jaeger nhận OTLP và trả waterfall của từng request.</p>
+              </div>
+              <label class="lookback-control">
+                <span>Khoảng thời gian</span>
+                <select id="trace-lookback">
+                  <option value="15m">15 phút</option>
+                  <option value="1h" selected>1 giờ</option>
+                  <option value="6h">6 giờ</option>
+                  <option value="24h">24 giờ</option>
+                </select>
+              </label>
+            </div>
+            <div class="trace-browser">
+              <div class="trace-list" id="trace-list" aria-live="polite">
+                <p class="telemetry-empty">Đang kết nối Jaeger...</p>
+              </div>
+              <div class="trace-detail" id="trace-detail">
+                <div class="trace-detail-empty">
+                  <strong>Chọn một trace</strong>
+                  <span>Waterfall sẽ cho biết span nào chậm hoặc lỗi.</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

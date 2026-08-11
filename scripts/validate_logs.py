@@ -24,6 +24,7 @@ def pii_scan_view(record: dict) -> str:
     }
     return json.dumps(content, ensure_ascii=False)
 
+
 def main() -> None:
     if not LOG_PATH.exists():
         print(f"Error: {LOG_PATH} not found. Run the app and send some requests first.")

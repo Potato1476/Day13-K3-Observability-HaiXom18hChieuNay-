@@ -11,16 +11,26 @@ class ChatRequest(BaseModel):
     session_id: str = Field(..., examples=["s_demo_01"])
     feature: str = Field(default="qa", examples=["qa", "summary"])
     message: str = Field(..., min_length=1)
+    prompt_label: Literal["baseline", "candidate", "production"] = "production"
 
 
 class ChatResponse(BaseModel):
     answer: str
     correlation_id: str
+    trace_id: str | None = None
     latency_ms: int
     tokens_in: int
     tokens_out: int
     cost_usd: float
     quality_score: float
+    prompt_name: str
+    prompt_label: str
+    prompt_version: str
+    prompt_source: str
+
+
+class PromptLabelUpdate(BaseModel):
+    version: str = Field(..., examples=["local-v2"])
 
 
 class LogRecord(BaseModel):
@@ -34,6 +44,10 @@ class LogRecord(BaseModel):
     session_id: str | None = None
     feature: str | None = None
     model: str | None = None
+    prompt_name: str | None = None
+    prompt_label: str | None = None
+    prompt_version: str | None = None
+    prompt_source: str | None = None
     latency_ms: int | None = None
     tokens_in: int | None = None
     tokens_out: int | None = None

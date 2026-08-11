@@ -39,8 +39,7 @@ def test_agent_links_prompt_version_to_trace_and_generation(monkeypatch) -> None
     monkeypatch.setattr(agent_module, "get_langfuse_client", lambda: client)
 
     agent = agent_module.LabAgent()
-    agent_module.LabAgent.run.__wrapped__(
-        agent,
+    agent.run(
         user_id="student-01",
         feature="qa",
         session_id="session-01",

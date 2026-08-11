@@ -1,0 +1,48 @@
+groups:
+  - name: day13-ai-slo-alerts
+    rules:
+      - alert: Day13HighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(day13_ai_request_latency_seconds_bucket[5m]))
+          ) > 3
+        for: 5m
+        labels:
+          severity: warning
+          owner: observability
+        annotations:
+          summary: AI request P95 latency is above 3 seconds
+          runbook_url: docs/alerts.md#alert-1--high-p95-latency
+
+      - alert: Day13HighErrorRate
+        expr: |
+          sum(rate(day13_ai_requests_total{status="error"}[5m]))
+          /
+          clamp_min(sum(rate(day13_ai_requests_total[5m])), 0.000001)
+          > 0.02
+        for: 5m
+        labels:
+          severity: critical
+          owner: api
+        annotations:
+          summary: AI request error rate is above 2 percent
+          runbook_url: docs/alerts.md#alert-2--high-error-rate
+
+      - alert: Day13LowQualityScore
+        expr: |
+          (
+            sum(rate(day13_ai_quality_score_sum[10m]))
+            /
+            clamp_min(sum(rate(day13_ai_quality_score_count[10m])), 0.000001)
+            < 0.75
+          )
+          and
+          sum(rate(day13_ai_quality_score_count[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          owner: ai-quality
+        annotations:
+          summary: Mean AI quality proxy is below 0.75
+          runbook_url: docs/alerts.md#alert-3--low-quality-score

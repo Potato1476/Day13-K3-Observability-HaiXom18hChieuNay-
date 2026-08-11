@@ -14,9 +14,9 @@ Trong lab 4 giờ này, bạn sẽ biến một API AI chạy được nhưng kh
 ## Bạn cần hoàn thành
 
 1. Hoàn thiện các khối `TODO` trong `app/` và `config/`.
-2. Tạo tối thiểu 10 traces có metadata trên Langfuse.
-3. Tạo hai phiên bản prompt cơ bản theo [hướng dẫn prompt versioning](docs/PROMPT_VERSIONING.md), gắn label và chứng minh trace liên kết đúng phiên bản.
-4. Dựng dashboard theo [`config/dashboard.yaml`](config/dashboard.yaml), làm theo [hướng dẫn dashboard](docs/DASHBOARD_SETUP.md) và chạy validator thành công.
+2. Tạo tối thiểu 10 traces có metadata. Bài làm hiện dùng OpenTelemetry + Jaeger thay cho Langfuse tracing.
+3. Tạo hai phiên bản prompt, gắn label và chứng minh trace theo [báo cáo tổng hợp](submission/REPORT.md).
+4. Dựng dashboard theo [`config/dashboard.yaml`](config/dashboard.yaml), làm theo báo cáo tổng hợp và chạy validator thành công.
 5. Điều tra challenge chính thức sau khi Lab Coach release `config/challenge.json`.
 6. Hoàn thiện `submission/REPORT.md` và lưu bằng chứng trong `submission/evidence/`.
 
@@ -24,7 +24,7 @@ Trong lab 4 giờ này, bạn sẽ biến một API AI chạy được nhưng kh
 
 | Mốc | Làm gì | Tự kiểm tra | Evidence |
 |---|---|---|---|
-| Setup | Cài Python, cấu hình Langfuse chung/cloud; Docker local chỉ khi cần | `/health` trả `ok: true` | ảnh health và môi trường không lộ key |
+| Setup | Cài Python, chạy Prometheus/Grafana/Jaeger bằng Docker | `/health` trả `ok: true` | ảnh health và môi trường không lộ key |
 | Logging & PII | Hoàn thiện correlation ID, metadata và redaction | `python scripts/validate_logs.py` đạt ít nhất 80/100 | log có correlation ID và log đã che PII |
 | Trace & Prompt Version | Tạo prompt v1/v2, chạy cùng input với hai label | trace có `prompt_name`, `prompt_label`, `prompt_version` | hai trace ID và ảnh đổi label/rollback |
 | Dashboard & SLO | Dựng đúng 6 panel từ `data/logs.jsonl` | `python scripts/validate_dashboard.py` báo `6/6 panel` | ảnh dashboard có time range, đơn vị, threshold |
@@ -33,7 +33,11 @@ Trong lab 4 giờ này, bạn sẽ biến một API AI chạy được nhưng kh
 
 Chi tiết thời gian và tiêu chí qua từng mốc nằm ngay trong [CHECKPOINTS.md](CHECKPOINTS.md); cấu trúc nộp bài nằm trong [SUBMISSION.md](SUBMISSION.md).
 
-Trong lab này, Langfuse dùng cho trace và prompt versioning; nguồn chuẩn của 6 panel dashboard là `data/logs.jsonl`. Chạy Langfuse local không thay đổi dashboard contract.
+Trong bài làm này, OpenTelemetry + Jaeger dùng cho trace; local prompt registry cung cấp v1/v2, label và rollback không cần Langfuse. Langfuse chỉ còn là backend managed tùy chọn. Nguồn chuẩn của 6 panel dashboard vẫn là `data/logs.jsonl` và contract không thay đổi.
+
+Repo đã có runtime Prometheus + Grafana được provision tự động. Kiến trúc, cách chạy và evidence nằm trong [báo cáo tổng hợp](submission/REPORT.md).
+
+Sau khi API và stack observability chạy, mở `http://127.0.0.1:8000/` để dùng Observability Console. Giao diện nhúng Grafana, cho phép tạo tải, bật/tắt incident, xem JSON logs và mở OpenTelemetry trace waterfall từ Jaeger mà không cần đổi terminal.
 
 ## 15 phút đầu
 
@@ -65,7 +69,7 @@ Nếu file chưa được release, script sẽ dừng và yêu cầu chờ Lab C
 app/          API, agent, logging, metrics, tracing và PII
 config/       log schema, dashboard contract, SLO, alert và challenge được release
 data/         dữ liệu practice và log sinh ra khi chạy
-docs/         hướng dẫn, dashboard spec và biểu mẫu bằng chứng
+docs/         hai tài liệu gốc: gợi ý và dashboard spec
 scripts/      load test, inject incident và kiểm tra log
 tests/        public tests
 submission/   báo cáo và evidence phải nộp
@@ -78,8 +82,7 @@ submission/   báo cáo và evidence phải nộp
 - [SUBMISSION.md](SUBMISSION.md): cấu trúc bài nộp.
 - [RUBRIC.md](RUBRIC.md): cách chấm tối đa 100 điểm.
 - [docs/GUIDE.md](docs/GUIDE.md): gợi ý khi bị kẹt.
-- [docs/PROMPT_VERSIONING.md](docs/PROMPT_VERSIONING.md): version, label và rollback prompt.
-- [docs/DASHBOARD_SETUP.md](docs/DASHBOARD_SETUP.md): nguồn dữ liệu và cách kiểm tra dashboard.
+- [submission/REPORT.md](submission/REPORT.md): tài liệu duy nhất cho kiến trúc, Prometheus/Grafana/Jaeger, logs/traces, prompt versioning, TODO, test và evidence.
 
 ## Phân vai nhóm — tối đa 4 vai trò
 
@@ -95,7 +98,7 @@ Một người có thể giữ hai vai trò khi nhóm ít người; không tách
 ## Lưu ý
 
 - App dùng fake LLM nên phần practice không cần API key trả phí.
-- Langfuse chung/cloud là cách mặc định; Docker Compose local chỉ là lựa chọn dự phòng trong `SETUP.md`.
-- Không có Langfuse key, app vẫn chạy bằng prompt local nhưng bạn không có bằng chứng trace/prompt version để lấy trọn điểm.
+- OpenTelemetry + Jaeger là tracing runtime mặc định và không cần API key.
+- Không có Langfuse key, app vẫn có trace Jaeger và local prompt versioning đầy đủ; evidence runtime nằm ngay trong `submission/REPORT.md`.
 - `validate_logs.py` chỉ là kiểm tra kỹ thuật nhanh, không phải điểm cuối cùng.
 - Không commit `.env`, API key, `.venv/` hoặc log chứa dữ liệu nhạy cảm.

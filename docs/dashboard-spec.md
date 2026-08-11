@@ -1,6 +1,6 @@
 # Yêu cầu dashboard
 
-Contract có thể kiểm tra bằng máy nằm tại `config/dashboard.yaml`. Hướng dẫn dựng và kiểm tra runtime nằm tại [DASHBOARD_SETUP.md](DASHBOARD_SETUP.md).
+Contract có thể kiểm tra bằng máy nằm tại `config/dashboard.yaml`. Hướng dẫn dựng và kiểm tra runtime nằm trong [báo cáo tổng hợp](../submission/REPORT.md).
 
 Dashboard chính cần đủ 6 nhóm thông tin:
 

@@ -8,6 +8,7 @@ from typing import Any
 import structlog
 from structlog.contextvars import merge_contextvars
 
+from .otel_tracing import current_trace_context
 from .pii import scrub_text
 
 LOG_PATH = Path(os.getenv("LOG_PATH", "data/logs.jsonl"))
@@ -43,12 +44,20 @@ def scrub_event(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     return event_dict
 
 
+def add_trace_context(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+    """Correlate every request log with its active OpenTelemetry trace and span."""
+    for key, value in current_trace_context().items():
+        event_dict.setdefault(key, value)
+    return event_dict
+
+
 
 def configure_logging() -> None:
     logging.basicConfig(format="%(message)s", level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
     structlog.configure(
         processors=[
             merge_contextvars,
+            add_trace_context,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True, key="ts"),
             scrub_event,

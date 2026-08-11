@@ -1,19 +1,19 @@
 alerts:
-  - name: HighLatencyAlert
+  - name: high_p95_latency
     severity: warning
-    condition: latency_p95_ms > 3000 for 5m
+    condition: latency p95 > 3000 ms for 5 minutes
     type: symptom-based
-    owner: Nguyen Tuan Anh
+    owner: observability
     runbook: docs/alerts.md#alert-1
-  - name: HighErrorRateAlert
+  - name: high_error_rate
     severity: critical
-    condition: error_rate_pct > 2 for 3m
+    condition: error rate > 2% for 5 minutes
     type: symptom-based
-    owner: Nguyen Tuan Anh
+    owner: api
     runbook: docs/alerts.md#alert-2
-  - name: LowQualityAlert
+  - name: low_quality_score
     severity: warning
-    condition: quality_score_avg < 0.75 for 10m
+    condition: mean quality score < 0.75 for 10 minutes
     type: symptom-based
-    owner: Nguyen Tuan Anh
+    owner: ai-quality
     runbook: docs/alerts.md#alert-3
