@@ -1,0 +1,1089 @@
+commit b090b67869ab9cc55bf94282941a3a2f1ec50387
+Author: Lystiger <dohunganh5002@gmail.com>
+Date:   Tue Aug 11 13:24:37 2026 +0700
+
+    feat(metrics/dashboard): add Prometheus contract and validation layer
+    
+    Nhánh feat/complete-observability-lab đã có instrumentation, stack
+    Prometheus/Grafana/Jaeger và dashboard chạy được, nhưng lớp contract của lab
+    vẫn còn ở baseline cũ. Commit này bổ sung đúng phần đó.
+    
+    - config/dashboard.yaml: schema v1 (đọc data/logs.jsonl, đơn vị ms) -> schema v2
+      đọc Prometheus, 6 panel với PromQL khớp dashboard đã provisioning, có đơn vị
+      và threshold cho từng panel.
+    - config/slo.yaml: mỗi SLI mang theo PromQL dùng để đo, objective latency đổi
+      sang giây cho đúng base unit của Prometheus.
+    - config/alert_rules.yaml: dạng `alerts:` tự chế (Prometheus không nạp được)
+      -> rule group chuẩn, khớp 1-1 với observability/prometheus/alerts.yml.
+    - docs/alerts.md: runbook cho ba alert. Sáu runbook_url trong hai file alert
+      đang trỏ tới file này nhưng file chưa tồn tại.
+    - scripts/validate_metrics.py: kiểm tra /prometheus có đủ series cho 6 panel.
+    - scripts/validate_dashboard.py: thêm --alerts, và chặn PromQL tham chiếu series
+      mà app không export.
+    - app/metrics.py: thêm EXPORTED_METRICS + is_exported_metric làm contract cho
+      validator. Không đụng tới instrumentation.
+    - tests: bổ sung test contract metric, test error đếm cả tử số lẫn mẫu số, và
+      test validator bắt được alert placeholder.
+    
+    python -m pytest -q            -> 49 passed
+    validate_dashboard.py --alerts -> 6/6 panel + 3 alert hợp lệ
+    validate_metrics.py            -> 85/100 (panel errors cần inject_incident)
+    
+    Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/app/metrics.py b/app/metrics.py
+index c6587f3..3ca4c71 100644
+--- a/app/metrics.py
++++ b/app/metrics.py
+@@ -52,6 +52,31 @@ KNOWN_ERROR_TYPES = frozenset(
+     {"ConnectionError", "RuntimeError", "TimeoutError", "ValueError", "other"}
+ )
+ 
++# Contract giữa app và dashboard: đây là toàn bộ tên series mà dashboard và alert
++# được phép tham chiếu. Histogram/Summary còn sinh thêm sample _bucket, _sum và
++# _count từ cùng một tên gốc. scripts/validate_dashboard.py đối chiếu lại danh
++# sách này nên PromQL gõ sai tên metric sẽ bị bắt trước khi lên Grafana.
++EXPORTED_METRICS = frozenset(
++    {
++        "day13_ai_requests_total",
++        "day13_ai_request_latency_seconds",
++        "day13_ai_errors_total",
++        "day13_ai_tokens_total",
++        "day13_ai_cost_usd_total",
++        "day13_ai_quality_score",
++    }
++)
++_HISTOGRAM_SUFFIXES = ("_bucket", "_sum", "_count")
++
++
++def is_exported_metric(name: str) -> bool:
++    if name in EXPORTED_METRICS:
++        return True
++    return any(
++        name.endswith(suffix) and name[: -len(suffix)] in EXPORTED_METRICS
++        for suffix in _HISTOGRAM_SUFFIXES
++    )
++
+ 
+ def _metric_feature(feature: str) -> str:
+     """Keep metric label cardinality bounded and prevent PII in label values."""
+diff --git a/config/alert_rules.yaml b/config/alert_rules.yaml
+index 6f9d8b1..8d4f17f 100644
+--- a/config/alert_rules.yaml
++++ b/config/alert_rules.yaml
+@@ -1,19 +1,60 @@
+-alerts:
+-  - name: high_p95_latency
+-    severity: warning
+-    condition: latency p95 > 3000 ms for 5 minutes
+-    type: symptom-based
+-    owner: observability
+-    runbook: docs/alerts.md#alert-1
+-  - name: high_error_rate
+-    severity: critical
+-    condition: error rate > 2% for 5 minutes
+-    type: symptom-based
+-    owner: api
+-    runbook: docs/alerts.md#alert-2
+-  - name: low_quality_score
+-    severity: warning
+-    condition: mean quality score < 0.75 for 10 minutes
+-    type: symptom-based
+-    owner: ai-quality
+-    runbook: docs/alerts.md#alert-3
++# Alert rules dạng Prometheus (format `groups:` → `rules:`), khớp 1-1 với file
++# đang được Prometheus nạp thật tại observability/prometheus/alerts.yml.
++#
++# Đây là file mà lab yêu cầu và là file mà `python scripts/validate_dashboard.py
++# --alerts` kiểm tra. Bản trước ở dạng `alerts:` list tự chế: Prometheus không nạp
++# được và validator cũng không kiểm tra được expr.
++#
++# Ba nguyên tắc:
++#   1. Symptom-based — `summary` mô tả ảnh hưởng lên người dùng, không mô tả
++#      implementation, vì nguyên nhân có thể khác đi còn triệu chứng thì không.
++#   2. `expr` phải là một phép SO SÁNH. Prometheus fire alert cho mọi sample mà
++#      expr trả về chứ không tự so với 0, nên biểu thức luôn có kết quả sẽ fire
++#      vĩnh viễn.
++#   3. Threshold lấy từ config/slo.yaml, không hardcode rời.
++#
++# Kiểm tra sau khi sửa:
++#   python scripts/validate_dashboard.py --alerts
++#   docker compose -f compose.observability.yaml exec prometheus \
++#     promtool check rules /etc/prometheus/alerts.yml
++#   docker compose -f compose.observability.yaml restart prometheus
++
++groups:
++  - name: day13-ai-slo-alerts
++    interval: 30s
++    rules:
++      # SLI latency_p95_seconds, objective 3s.
++      - alert: Day13HighLatencyP95
++        expr: histogram_quantile(0.95, sum by (le) (rate(day13_ai_request_latency_seconds_bucket[5m]))) > 3
++        for: 5m
++        labels:
++          severity: warning
++          owner: observability
++        annotations:
++          summary: P95 latency vượt SLO 3 giây — người dùng phải chờ lâu bất thường
++          runbook_url: docs/alerts.md#alert-1--high-p95-latency
++
++      # SLI error_rate_pct, objective 2%. Tử số và mẫu số cùng lấy từ
++      # day13_ai_requests_total nên một request lỗi được đếm ở cả hai phía;
++      # clamp_min giữ mẫu số khác 0 khi chưa có traffic.
++      - alert: Day13HighErrorRate
++        expr: sum(rate(day13_ai_requests_total{status="error"}[5m])) / clamp_min(sum(rate(day13_ai_requests_total[5m])), 0.000001) > 0.02
++        for: 5m
++        labels:
++          severity: critical
++          owner: api
++        annotations:
++          summary: Hơn 2% request thất bại — người dùng nhận lỗi thay vì câu trả lời
++          runbook_url: docs/alerts.md#alert-2--high-error-rate
++
++      # SLI quality_score_avg, objective 0.75. Vế `and ... > 0` chặn alert giả khi
++      # cửa sổ 10 phút chưa có mẫu nào.
++      - alert: Day13LowQualityScore
++        expr: (sum(rate(day13_ai_quality_score_sum[10m])) / clamp_min(sum(rate(day13_ai_quality_score_count[10m])), 0.000001) < 0.75) and sum(rate(day13_ai_quality_score_count[10m])) > 0
++        for: 10m
++        labels:
++          severity: warning
++          owner: ai-quality
++        annotations:
++          summary: Điểm chất lượng trung bình dưới 0.75 — câu trả lời kém hữu ích với người dùng
++          runbook_url: docs/alerts.md#alert-3--low-quality-score
+diff --git a/config/dashboard.yaml b/config/dashboard.yaml
+index 95af4d2..4d333e3 100644
+--- a/config/dashboard.yaml
++++ b/config/dashboard.yaml
+@@ -1,16 +1,33 @@
++# Dashboard contract — schema v2 (Prometheus).
++#
++# File này là bản mô tả máy đọc được của 6 panel Grafana, để
++# `python scripts/validate_dashboard.py` kiểm tra được rằng dashboard chỉ tham
++# chiếu series mà app thực sự export (app/metrics.py) và mỗi panel đều có đơn vị
++# cùng threshold rõ ràng.
++#
++# PromQL ở đây khớp với dashboard đã provisioning tại
++# observability/grafana/dashboards/day13-ai-observability.json. Khác biệt duy nhất:
++# Grafana dùng $__rate_interval, contract dùng khoảng cố định để kiểm tra tĩnh.
++#
++# Prometheus lưu latency bằng GIÂY; panel latency nhân 1000 để hiển thị theo ms
++# nên `unit: ms` ở đây là đơn vị hiển thị, không phải đơn vị lưu trữ.
++
+ dashboard:
+-  schema_version: 1
++  schema_version: 2
+   title: Day 13 AI Observability
++  datasource: prometheus
+   time_range_minutes: 60
+   refresh_seconds: 30
+   panels:
+     - id: latency
+       title: Latency percentiles
+-      source: data/logs.jsonl
+-      events: [response_sent]
+-      fields: [latency_ms]
++      source: prometheus
++      metrics: [day13_ai_request_latency_seconds_bucket]
+       aggregations: [p50, p95, p99]
+-      query: 'event == "response_sent" | percentile(latency_ms, [50, 95, 99])'
++      queries:
++        p50: histogram_quantile(0.50, sum by (le) (rate(day13_ai_request_latency_seconds_bucket[5m]))) * 1000
++        p95: histogram_quantile(0.95, sum by (le) (rate(day13_ai_request_latency_seconds_bucket[5m]))) * 1000
++        p99: histogram_quantile(0.99, sum by (le) (rate(day13_ai_request_latency_seconds_bucket[5m]))) * 1000
+       unit: ms
+       threshold:
+         aggregation: p95
+@@ -19,12 +36,13 @@ dashboard:
+ 
+     - id: traffic
+       title: Request traffic
+-      source: data/logs.jsonl
+-      events: [request_received]
+-      fields: [event]
+-      aggregations: [count, rate_per_minute]
+-      query: 'event == "request_received" | count() by 1m'
+-      unit: requests_per_minute
++      source: prometheus
++      metrics: [day13_ai_requests_total]
++      aggregations: [rate_per_minute, count_by_feature]
++      queries:
++        rate_per_minute: sum(rate(day13_ai_requests_total[5m])) * 60
++        count_by_feature: sum by (feature) (increase(day13_ai_requests_total[5m]))
++      unit: reqpm
+       threshold:
+         aggregation: rate_per_minute
+         operator: gte
+@@ -32,11 +50,13 @@ dashboard:
+ 
+     - id: errors
+       title: Error rate and breakdown
+-      source: data/logs.jsonl
+-      events: [request_received, request_failed]
+-      fields: [error_type]
+-      aggregations: [error_rate_pct, count_by_value]
+-      query: 'count(event == "request_failed") / count(event == "request_received") * 100; count_by(error_type)'
++      source: prometheus
++      metrics: [day13_ai_requests_total, day13_ai_errors_total]
++      aggregations: [error_rate_pct, count_by_error_type]
++      queries:
++        # clamp_min giữ mẫu số khác 0 để panel hiện 0% thay vì NaN khi chưa có traffic.
++        error_rate_pct: 100 * sum(rate(day13_ai_requests_total{status="error"}[5m])) / clamp_min(sum(rate(day13_ai_requests_total[5m])), 0.000001)
++        count_by_error_type: sum by (error_type) (rate(day13_ai_errors_total[5m])) * 60
+       unit: percent
+       threshold:
+         aggregation: error_rate_pct
+@@ -45,38 +65,42 @@ dashboard:
+ 
+     - id: cost
+       title: Cost over time
+-      source: data/logs.jsonl
+-      events: [response_sent]
+-      fields: [cost_usd]
+-      aggregations: [sum_by_minute, total]
+-      query: 'event == "response_sent" | sum(cost_usd) by 1m; sum(cost_usd)'
+-      unit: usd
++      source: prometheus
++      metrics: [day13_ai_cost_usd_total]
++      aggregations: [usd_per_minute, total_usd]
++      queries:
++        usd_per_minute: sum(rate(day13_ai_cost_usd_total[5m])) * 60
++        total_usd: sum(increase(day13_ai_cost_usd_total[1h]))
++      unit: currencyUSD
+       threshold:
+-        aggregation: total
++        aggregation: total_usd
+         operator: lte
+         value: 2.5
+ 
+     - id: tokens
+       title: Input and output tokens
+-      source: data/logs.jsonl
+-      events: [response_sent]
+-      fields: [tokens_in, tokens_out]
+-      aggregations: [sum_by_field]
+-      query: 'event == "response_sent" | sum(tokens_in), sum(tokens_out)'
+-      unit: tokens
++      source: prometheus
++      metrics: [day13_ai_tokens_total]
++      aggregations: [tokens_per_minute_by_direction, total_tokens]
++      queries:
++        tokens_per_minute_by_direction: sum by (direction) (rate(day13_ai_tokens_total[5m])) * 60
++        total_tokens: sum(increase(day13_ai_tokens_total[1h]))
++      unit: short
+       threshold:
+-        aggregation: sum_by_field
++        aggregation: total_tokens
+         operator: lte
+         value: 50000
+ 
+     - id: quality
+       title: Quality proxy
+-      source: data/logs.jsonl
+-      events: [response_sent]
+-      fields: [quality_score]
++      source: prometheus
++      metrics: [day13_ai_quality_score_sum, day13_ai_quality_score_count]
+       aggregations: [mean]
+-      query: 'event == "response_sent" | mean(quality_score)'
+-      unit: score_0_to_1
++      queries:
++        # Mean chứ không phải quantile: chia hai rate() cho ra trung bình trong cửa sổ,
++        # chia hai counter thô sẽ ra trung bình từ lúc process khởi động.
++        mean: sum(rate(day13_ai_quality_score_sum[5m])) / clamp_min(sum(rate(day13_ai_quality_score_count[5m])), 0.000001)
++      unit: none
+       threshold:
+         aggregation: mean
+         operator: gte
+diff --git a/config/slo.yaml b/config/slo.yaml
+index 74d7e88..6e0378e 100644
+--- a/config/slo.yaml
++++ b/config/slo.yaml
+@@ -1,16 +1,27 @@
++# SLO của lab. Mỗi SLI mang theo đúng câu PromQL dùng để đo, để alert
++# (config/alert_rules.yaml, observability/prometheus/alerts.yml) và panel Grafana
++# không bao giờ nói hai chuyện khác nhau về cùng một ngưỡng.
++#
++# Prometheus lưu latency bằng GIÂY nên objective ở đây cũng tính bằng giây.
++
+ service: day13-observability-lab
+ window: 28d
++datasource: prometheus
+ slis:
+-  latency_p95_ms:
+-    objective: 3000
++  latency_p95_seconds:
++    objective: 3
+     target: 99.5
+-    note: 99.5% of 28-day windows should keep P95 latency at or below 3 seconds
++    promql: histogram_quantile(0.95, sum by (le) (rate(day13_ai_request_latency_seconds_bucket[5m])))
++    note: 99.5% cửa sổ 28 ngày phải giữ P95 latency ở mức 3 giây trở xuống
+   error_rate_pct:
+     objective: 2
+     target: 99.0
+-  daily_cost_usd:
++    promql: 100 * sum(rate(day13_ai_requests_total{status="error"}[5m])) / clamp_min(sum(rate(day13_ai_requests_total[5m])), 0.000001)
++  hourly_cost_usd:
+     objective: 2.5
+     target: 100.0
++    promql: sum(increase(day13_ai_cost_usd_total[1h]))
+   quality_score_avg:
+     objective: 0.75
+     target: 95.0
++    promql: sum(rate(day13_ai_quality_score_sum[10m])) / clamp_min(sum(rate(day13_ai_quality_score_count[10m])), 0.000001)
+diff --git a/docs/alerts.md b/docs/alerts.md
+new file mode 100644
+index 0000000..c6aa014
+--- /dev/null
++++ b/docs/alerts.md
+@@ -0,0 +1,91 @@
++# Alert và Runbook
++
++Ba alert của lab được định nghĩa ở hai nơi và phải luôn khớp nhau:
++
++- [`observability/prometheus/alerts.yml`](../observability/prometheus/alerts.yml) — file Prometheus **thực sự nạp** (mount vào `/etc/prometheus/alerts.yml`).
++- [`config/alert_rules.yaml`](../config/alert_rules.yaml) — file lab yêu cầu, và là file `scripts/validate_dashboard.py --alerts` kiểm tra.
++
++Threshold của cả hai lấy từ [`config/slo.yaml`](../config/slo.yaml) để alert, SLO và panel Grafana không nói ba chuyện khác nhau.
++
++## Nguyên tắc
++
++- **Symptom-based.** `summary` mô tả ảnh hưởng tới người dùng, không mô tả implementation — nguyên nhân có thể khác đi ở lần sự cố sau, còn triệu chứng thì không.
++- **`expr` phải là một phép so sánh.** Prometheus fire alert cho *mọi* sample mà expr trả về, chứ không tự so với 0. Một biểu thức luôn có kết quả sẽ fire vĩnh viễn; `vector(0)` thì ngược lại, không bao giờ fire — nên nó là placeholder an toàn nhưng vô dụng.
++- **`for` chặn spike ngắn.** Alert chỉ fire khi triệu chứng duy trì đủ lâu.
++- **`clamp_min` cho mọi mẫu số.** Không có nó, lúc chưa có traffic thì tỉ lệ ra `NaN` và alert im lặng đúng lúc ta cần nó nhất.
++
++## Kiểm tra sau khi sửa
++
++```bash
++python scripts/validate_dashboard.py --alerts
++docker compose -f compose.observability.yaml exec prometheus \
++  promtool check rules /etc/prometheus/alerts.yml
++docker compose -f compose.observability.yaml restart prometheus
++```
++
++Dùng `restart` chứ đừng chỉ gọi `POST /-/reload`: hầu hết editor lưu file theo kiểu atomic nên inode đổi sau mỗi lần lưu, reload có thể vẫn đọc nội dung cũ.
++
++Xác nhận rule đã nạp tại http://localhost:9090/rules và trạng thái tại http://localhost:9090/alerts. Lab không cấu hình Alertmanager, nên bằng chứng cần nộp là rule đã nạp cộng trạng thái `PENDING`/`FIRING` khi bật incident practice.
++
++---
++
++## Alert 1 — High P95 latency
++
++- **Tên:** `Day13HighLatencyP95`
++- **Severity:** warning
++- **Owner:** observability
++- **SLI/SLO:** `latency_p95_seconds`, objective 3 giây, target 99.5% cửa sổ 28 ngày.
++- **PromQL:**
++  ```promql
++  histogram_quantile(0.95, sum by (le) (rate(day13_ai_request_latency_seconds_bucket[5m]))) > 3
++  ```
++- **Điều kiện duy trì:** `for: 5m`.
++- **Ảnh hưởng tới người dùng:** cứ 20 người thì có 1 người chờ quá 3 giây mới nhận được câu trả lời; ở mức này người dùng bắt đầu bấm lại hoặc bỏ đi.
++- **Ba bước kiểm tra đầu tiên:**
++  1. Mở panel *Latency percentiles*, so p50 với p95 — p50 phẳng mà p95 dựng đứng nghĩa là chỉ một phần request bị chậm, hãy tìm theo `feature`.
++  2. Mở Jaeger, lọc span `ai.agent.run` có duration lớn, xem span con nào chiếm thời gian: `rag.retrieve`, `llm.generate` hay `prompt.resolve`.
++  3. Lấy `correlation_id` từ trace đó và `grep` trong `data/logs.jsonl` để xem `latency_ms` cùng metadata của đúng request.
++- **Mitigation tạm thời:** tắt incident đang bật (`POST /incidents/{name}/disable`); nếu do prompt mới làm output dài ra thì rollback label `production` về version cũ (`POST /prompts/rollback`).
++
++## Alert 2 — High error rate
++
++- **Tên:** `Day13HighErrorRate`
++- **Severity:** critical
++- **Owner:** api
++- **SLI/SLO:** `error_rate_pct`, objective 2%, target 99.0%.
++- **PromQL:**
++  ```promql
++  sum(rate(day13_ai_requests_total{status="error"}[5m]))
++    / clamp_min(sum(rate(day13_ai_requests_total[5m])), 0.000001) > 0.02
++  ```
++- **Điều kiện duy trì:** `for: 5m`.
++- **Ảnh hưởng tới người dùng:** hơn 2% request trả về lỗi thay vì câu trả lời — người dùng thấy hỏng, không phải thấy chậm.
++- **Ba bước kiểm tra đầu tiên:**
++  1. Panel *Error rate and breakdown*, xem chuỗi `sum by (error_type)` để biết lỗi tập trung vào loại nào.
++  2. Trong Jaeger lọc span có `otel.status_code = ERROR`, đọc `exception.type` và `exception.message`.
++  3. `grep '"event":"request_failed"' data/logs.jsonl` rồi đối chiếu `error_type` với `correlation_id` tương ứng.
++- **Mitigation tạm thời:** tắt incident `tool_fail`; nếu lỗi đến từ một `feature` duy nhất thì tạm ngắt feature đó thay vì cả API.
++- **Ghi chú tử số/mẫu số:** `record_error()` tăng **cả** `day13_ai_requests_total{status="error"}` lẫn `day13_ai_errors_total`. Nếu chỉ tăng cái sau, mẫu số không đổi và alert này sẽ không bao giờ fire.
++
++## Alert 3 — Low quality score
++
++- **Tên:** `Day13LowQualityScore`
++- **Severity:** warning
++- **Owner:** ai-quality
++- **SLI/SLO:** `quality_score_avg`, objective 0.75, target 95%.
++- **PromQL:**
++  ```promql
++  (
++    sum(rate(day13_ai_quality_score_sum[10m]))
++      / clamp_min(sum(rate(day13_ai_quality_score_count[10m])), 0.000001) < 0.75
++  )
++  and sum(rate(day13_ai_quality_score_count[10m])) > 0
++  ```
++- **Điều kiện duy trì:** `for: 10m` — cửa sổ dài hơn hai alert trên vì quality là chỉ số nhiễu, không nên đánh thức người trực vì vài request lệch.
++- **Ảnh hưởng tới người dùng:** API vẫn trả lời nhanh và không lỗi, nhưng câu trả lời kém hữu ích — đây là loại sự cố mà latency và error rate hoàn toàn không thấy.
++- **Ba bước kiểm tra đầu tiên:**
++  1. Panel *Quality proxy*, đối chiếu thời điểm tụt với thời điểm đổi prompt label (log `prompt_label_updated` / `prompt_rollback`).
++  2. `GET /prompts` xem label `production` đang trỏ tới version nào.
++  3. Mở trace gần nhất, so `gen_ai.prompt.version` và `rag.document_count` — quality tụt kèm `document_count = 0` nghĩa là vấn đề ở retrieval chứ không phải ở prompt.
++- **Mitigation tạm thời:** `POST /prompts/rollback` để đưa label `production` về version baseline, rồi theo dõi panel trong 10 phút tiếp theo.
++- **Vì sao có vế `and ... > 0`:** khi cửa sổ 10 phút không có mẫu nào, vế chia trả về 0 và sẽ fire một alert giả. Vế `and` yêu cầu phải thực sự có traffic thì alert mới có nghĩa.
+diff --git a/scripts/validate_dashboard.py b/scripts/validate_dashboard.py
+index a541354..687c83b 100644
+--- a/scripts/validate_dashboard.py
++++ b/scripts/validate_dashboard.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import argparse
++import re
+ import sys
+ from pathlib import Path
+ 
+@@ -11,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
+     sys.path.insert(0, str(REPO_ROOT))
+ 
+ from app.cli import configure_utf8_stdio
++from app.metrics import is_exported_metric
+ 
+ 
+ REQUIRED_PANEL_IDS = frozenset(
+@@ -19,19 +21,57 @@ REQUIRED_PANEL_IDS = frozenset(
+ REQUIRED_PANEL_FIELDS = (
+     "title",
+     "source",
+-    "events",
+-    "fields",
++    "metrics",
+     "aggregations",
+-    "query",
++    "queries",
+     "unit",
+     "threshold",
+ )
++DATASOURCE = "prometheus"
++# Mọi series của lab đều bắt đầu bằng day13_ai_; dùng để bắt lỗi gõ sai tên metric.
++LAB_METRIC_PATTERN = re.compile(r"\bday13_ai_[a-z0-9_]+\b")
++PLACEHOLDER_EXPR = "vector(0)"
+ 
+ 
+ class DashboardConfigError(ValueError):
+     pass
+ 
+ 
++def _validate_panel_queries(panel_id: str, panel: dict) -> None:
++    queries = panel["queries"]
++    if not isinstance(queries, dict):
++        raise DashboardConfigError(
++            f"'{panel_id}.queries' phải là map từ aggregation sang câu PromQL"
++        )
++
++    missing = [name for name in panel["aggregations"] if name not in queries]
++    if missing:
++        raise DashboardConfigError(
++            f"'{panel_id}.queries' thiếu PromQL cho: {', '.join(missing)}"
++        )
++    for name, expression in queries.items():
++        if not isinstance(expression, str) or not expression.strip():
++            raise DashboardConfigError(f"'{panel_id}.queries.{name}' phải là PromQL không rỗng")
++
++    joined = " ".join(str(expression) for expression in queries.values())
++
++    for referenced in sorted(set(LAB_METRIC_PATTERN.findall(joined))):
++        if not is_exported_metric(referenced):
++            raise DashboardConfigError(
++                f"'{panel_id}.queries' dùng metric app không export: {referenced}"
++            )
++
++    for metric in panel["metrics"]:
++        if not isinstance(metric, str) or not is_exported_metric(metric):
++            raise DashboardConfigError(
++                f"'{panel_id}.metrics' chứa metric app không export: {metric}"
++            )
++        if metric not in joined:
++            raise DashboardConfigError(
++                f"'{panel_id}.metrics' khai báo {metric} nhưng không PromQL nào dùng tới"
++            )
++
++
+ def load_dashboard_config(path: Path) -> dict:
+     try:
+         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+@@ -43,8 +83,10 @@ def load_dashboard_config(path: Path) -> dict:
+     dashboard = payload.get("dashboard") if isinstance(payload, dict) else None
+     if not isinstance(dashboard, dict):
+         raise DashboardConfigError("Thiếu object 'dashboard'")
+-    if dashboard.get("schema_version") != 1:
+-        raise DashboardConfigError("'dashboard.schema_version' phải bằng 1")
++    if dashboard.get("schema_version") != 2:
++        raise DashboardConfigError("'dashboard.schema_version' phải bằng 2")
++    if dashboard.get("datasource") != DATASOURCE:
++        raise DashboardConfigError("'dashboard.datasource' phải là 'prometheus'")
+     if dashboard.get("time_range_minutes") != 60:
+         raise DashboardConfigError("'dashboard.time_range_minutes' phải bằng 60")
+     refresh_seconds = dashboard.get("refresh_seconds")
+@@ -69,12 +111,14 @@ def load_dashboard_config(path: Path) -> dict:
+             raise DashboardConfigError("Mỗi dashboard panel phải là một YAML object")
+         panel_id = panel["id"]
+         for field in REQUIRED_PANEL_FIELDS:
+-            if panel.get(field) in (None, "", []):
++            if panel.get(field) in (None, "", [], {}):
+                 raise DashboardConfigError(f"Thiếu hoặc rỗng: {panel_id}.{field}")
+-        if not all(isinstance(panel[field], list) for field in ("events", "fields", "aggregations")):
+-            raise DashboardConfigError(
+-                f"'{panel_id}.events/fields/aggregations' phải là danh sách"
+-            )
++        if panel["source"] != DATASOURCE:
++            raise DashboardConfigError(f"'{panel_id}.source' phải là 'prometheus'")
++        if not all(isinstance(panel[field], list) for field in ("metrics", "aggregations")):
++            raise DashboardConfigError(f"'{panel_id}.metrics/aggregations' phải là danh sách")
++
++        _validate_panel_queries(panel_id, panel)
+ 
+         threshold = panel["threshold"]
+         if not isinstance(threshold, dict):
+@@ -93,6 +137,80 @@ def load_dashboard_config(path: Path) -> dict:
+     return payload
+ 
+ 
++def load_alert_rules(path: Path) -> list[dict]:
++    """Kiểm tra cấu trúc file alert rules của Prometheus và trả về danh sách rule."""
++    try:
++        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
++    except FileNotFoundError as exc:
++        raise DashboardConfigError(f"Không tìm thấy alert rules: {path}") from exc
++    except yaml.YAMLError as exc:
++        raise DashboardConfigError(f"Alert rules không phải YAML hợp lệ: {exc}") from exc
++
++    groups = payload.get("groups") if isinstance(payload, dict) else None
++    if not isinstance(groups, list) or not groups:
++        raise DashboardConfigError("Alert rules phải có danh sách 'groups' không rỗng")
++
++    rules: list[dict] = []
++    for group in groups:
++        if not isinstance(group, dict) or not group.get("name"):
++            raise DashboardConfigError("Mỗi group phải có 'name'")
++        group_rules = group.get("rules")
++        if not isinstance(group_rules, list) or not group_rules:
++            raise DashboardConfigError(f"Group '{group.get('name')}' phải có 'rules' không rỗng")
++        for rule in group_rules:
++            if not isinstance(rule, dict) or not rule.get("alert"):
++                raise DashboardConfigError(f"Group '{group['name']}' có rule thiếu 'alert'")
++            for field in ("expr", "for", "labels", "annotations"):
++                if rule.get(field) in (None, "", {}):
++                    raise DashboardConfigError(f"Alert '{rule['alert']}' thiếu '{field}'")
++            rules.append(rule)
++
++    if len(rules) < 3:
++        raise DashboardConfigError(f"Cần tối thiểu 3 alert, đang có {len(rules)}")
++    return rules
++
++
++def report_alert_rules(rules: list[dict]) -> bool:
++    """In trạng thái hoàn thiện của alert rules. Trả về True nếu không còn TODO."""
++    incomplete: list[str] = []
++    for rule in rules:
++        name = str(rule["alert"])
++        problems = []
++        expression = str(rule["expr"]).strip()
++        if PLACEHOLDER_EXPR in expression:
++            problems.append("expr vẫn là placeholder vector(0)")
++        elif not LAB_METRIC_PATTERN.search(expression):
++            problems.append("expr không tham chiếu metric day13_ai_* nào")
++        else:
++            unknown = [
++                metric
++                for metric in sorted(set(LAB_METRIC_PATTERN.findall(expression)))
++                if not is_exported_metric(metric)
++            ]
++            if unknown:
++                problems.append(f"expr dùng metric không export: {', '.join(unknown)}")
++        if "TODO" in name:
++            problems.append("tên alert vẫn còn TODO")
++        if "TODO" in str(rule["labels"].get("severity", "")):
++            problems.append("severity vẫn còn TODO")
++        if "TODO" in str(rule["labels"].get("owner", "")):
++            problems.append("owner vẫn còn TODO")
++        if "TODO" in str(rule["annotations"].get("summary", "")):
++            problems.append("summary vẫn còn TODO")
++        if not rule["annotations"].get("runbook_url"):
++            problems.append("thiếu runbook_url")
++        if problems:
++            incomplete.append(f"  - {name}: {'; '.join(problems)}")
++
++    print(f"\n--- Alert rules ({len(rules)} alert) ---")
++    if incomplete:
++        print("CHƯA HOÀN THIỆN:")
++        print("\n".join(incomplete))
++        return False
++    print("HỢP LỆ: mọi alert đã có expr PromQL, severity, owner, summary và runbook.")
++    return True
++
++
+ def main() -> int:
+     configure_utf8_stdio()
+     parser = argparse.ArgumentParser(description="Kiểm tra dashboard contract của Day 13")
+@@ -102,6 +220,14 @@ def main() -> int:
+         default=REPO_ROOT / "config" / "dashboard.yaml",
+         help="Đường dẫn tới dashboard YAML",
+     )
++    parser.add_argument(
++        "--alerts",
++        nargs="?",
++        const=REPO_ROOT / "config" / "alert_rules.yaml",
++        type=Path,
++        default=None,
++        help="Kiểm tra thêm file alert rules của Prometheus",
++    )
+     args = parser.parse_args()
+ 
+     try:
+@@ -110,7 +236,20 @@ def main() -> int:
+         print(f"KHÔNG HỢP LỆ: {exc}")
+         return 1
+ 
+-    print(f"HỢP LỆ: {len(REQUIRED_PANEL_IDS)}/6 panel có trong dashboard contract.")
++    print(
++        f"HỢP LỆ: {len(REQUIRED_PANEL_IDS)}/6 panel có trong dashboard contract "
++        f"và mọi PromQL đều dùng metric app đang export."
++    )
++
++    if args.alerts is not None:
++        try:
++            rules = load_alert_rules(args.alerts)
++        except DashboardConfigError as exc:
++            print(f"KHÔNG HỢP LỆ: {exc}")
++            return 1
++        if not report_alert_rules(rules):
++            return 1
++
+     return 0
+ 
+ 
+diff --git a/scripts/validate_metrics.py b/scripts/validate_metrics.py
+new file mode 100644
+index 0000000..f884d9d
+--- /dev/null
++++ b/scripts/validate_metrics.py
+@@ -0,0 +1,146 @@
++"""Kiểm tra nhanh endpoint /prometheus có đủ series cho 6 panel Prometheus hay chưa.
++
++Chạy khi API đang chạy và đã có traffic:
++
++    uvicorn app.main:app --reload --env-file .env --host 0.0.0.0
++    python scripts/load_test.py
++    python scripts/validate_metrics.py
++
++Giống validate_logs.py, đây chỉ là kiểm tra kỹ thuật nhanh, không phải điểm cuối.
++"""
++
++from __future__ import annotations
++
++import argparse
++import os
++import sys
++from pathlib import Path
++
++import httpx
++from prometheus_client.parser import text_string_to_metric_families
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++if str(REPO_ROOT) not in sys.path:
++    sys.path.insert(0, str(REPO_ROOT))
++
++from app.cli import configure_utf8_stdio
++
++DEFAULT_APP_URL = os.getenv("APP_BASE_URL", "http://127.0.0.1:8000")
++DEFAULT_PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
++
++
++def fetch_metrics(base_url: str) -> str:
++    response = httpx.get(f"{base_url.rstrip('/')}/prometheus", timeout=10.0)
++    response.raise_for_status()
++    return response.text
++
++
++def collect_samples(exposition: str) -> list:
++    samples = []
++    for family in text_string_to_metric_families(exposition):
++        samples.extend(family.samples)
++    return samples
++
++
++def total(samples: list, name: str, **labels: str) -> float:
++    return sum(
++        sample.value
++        for sample in samples
++        if sample.name == name
++        and all(sample.labels.get(key) == value for key, value in labels.items())
++    )
++
++
++def check_prometheus_target(prometheus_url: str) -> None:
++    try:
++        response = httpx.get(f"{prometheus_url.rstrip('/')}/api/v1/targets", timeout=5.0)
++        response.raise_for_status()
++        targets = response.json()["data"]["activeTargets"]
++    except Exception as exc:  # Prometheus là tùy chọn khi chạy kiểm tra nhanh
++        print(f"\n[i] Không đọc được Prometheus tại {prometheus_url}: {type(exc).__name__}")
++        print("    Chạy 'docker compose up -d' nếu bạn cần dashboard và alert.")
++        return
++
++    lab_targets = [
++        target for target in targets if target["labels"].get("job") == "day13-ai-api"
++    ]
++    if not lab_targets:
++        print("\n[!] Prometheus chạy nhưng không có target 'day13-ai-api'.")
++        return
++    for target in lab_targets:
++        health = target.get("health", "unknown")
++        marker = "+" if health == "up" else "-"
++        print(f"\n{marker} Prometheus target {target['scrapeUrl']}: {health}")
++        if health != "up":
++            print(f"    lastError: {target.get('lastError') or 'không có'}")
++
++
++def main() -> int:
++    configure_utf8_stdio()
++    parser = argparse.ArgumentParser(description="Kiểm tra metrics Prometheus của Day 13")
++    parser.add_argument("--url", default=DEFAULT_APP_URL, help="Base URL của API")
++    parser.add_argument(
++        "--prometheus-url",
++        default=DEFAULT_PROMETHEUS_URL,
++        help="Base URL của Prometheus (bỏ qua nếu chưa chạy Docker)",
++    )
++    args = parser.parse_args()
++
++    try:
++        exposition = fetch_metrics(args.url)
++    except Exception as exc:
++        print(f"Error: không gọi được {args.url}/prometheus ({type(exc).__name__}).")
++        print("Hãy chạy API trước: uvicorn app.main:app --reload --env-file .env --host 0.0.0.0")
++        return 1
++
++    samples = collect_samples(exposition)
++    requests_success = total(samples, "day13_ai_requests_total", status="success")
++    requests_error = total(samples, "day13_ai_requests_total", status="error")
++    latency_count = total(samples, "day13_ai_request_latency_seconds_count")
++    latency_sum = total(samples, "day13_ai_request_latency_seconds_sum")
++    tokens_in = total(samples, "day13_ai_tokens_total", direction="input")
++    tokens_out = total(samples, "day13_ai_tokens_total", direction="output")
++    cost = total(samples, "day13_ai_cost_usd_total")
++    quality_count = total(samples, "day13_ai_quality_score_count")
++    quality_sum = total(samples, "day13_ai_quality_score_sum")
++    errors = total(samples, "day13_ai_errors_total")
++
++    print("--- Prometheus Exposition Check ---")
++    print(f"Endpoint: {args.url}/prometheus")
++    print(f"Số sample đọc được: {len(samples)}")
++    print(f"day13_ai_requests_total: success={requests_success:.0f} error={requests_error:.0f}")
++    print(f"day13_ai_request_latency_seconds: count={latency_count:.0f} sum={latency_sum:.3f}s")
++    print(f"day13_ai_tokens_total: input={tokens_in:.0f} output={tokens_out:.0f}")
++    print(f"day13_ai_cost_usd_total: {cost:.6f}")
++    print(f"day13_ai_quality_score: count={quality_count:.0f} sum={quality_sum:.2f}")
++    print(f"day13_ai_errors_total: {errors:.0f}")
++
++    print("\n--- Panel Readiness (Estimates) ---")
++    score = 0
++    checks = (
++        ("traffic", requests_success > 0, 20, "day13_ai_requests_total chưa tăng"),
++        ("latency", latency_count > 0, 20, "chưa observe day13_ai_request_latency_seconds"),
++        ("tokens", tokens_in > 0 and tokens_out > 0, 15, "thiếu day13_ai_tokens_total input/output"),
++        ("cost", cost > 0, 15, "chưa cộng day13_ai_cost_usd_total"),
++        ("quality", quality_count > 0, 15, "chưa observe day13_ai_quality_score"),
++        (
++            "errors",
++            errors > 0 and requests_error > 0,
++            15,
++            "chưa có mẫu lỗi; chạy inject_incident.py --scenario tool_fail rồi load_test.py",
++        ),
++    )
++    for panel, ok, weight, hint in checks:
++        if ok:
++            score += weight
++            print(f"+ [PASSED] panel {panel}")
++        else:
++            print(f"- [FAILED] panel {panel}: {hint}")
++
++    print(f"\nEstimated Score: {score}/100")
++    check_prometheus_target(args.prometheus_url)
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/test_dashboard_validator.py b/tests/test_dashboard_validator.py
+index a41ea78..2e80e43 100644
+--- a/tests/test_dashboard_validator.py
++++ b/tests/test_dashboard_validator.py
+@@ -10,13 +10,14 @@ import yaml
+ REPO_ROOT = Path(__file__).resolve().parents[1]
+ 
+ 
+-def run_validator(config_path: Path) -> subprocess.CompletedProcess[str]:
++def run_validator(config_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+     return subprocess.run(
+         [
+             sys.executable,
+             str(REPO_ROOT / "scripts" / "validate_dashboard.py"),
+             "--config",
+             str(config_path),
++            *extra,
+         ],
+         cwd=REPO_ROOT,
+         capture_output=True,
+@@ -26,6 +27,18 @@ def run_validator(config_path: Path) -> subprocess.CompletedProcess[str]:
+     )
+ 
+ 
++def write_variant(tmp_path: Path, mutate) -> Path:
++    payload = yaml.safe_load(
++        (REPO_ROOT / "config" / "dashboard.yaml").read_text(encoding="utf-8")
++    )
++    mutate(payload["dashboard"])
++    config_path = tmp_path / "dashboard.yaml"
++    config_path.write_text(
++        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8"
++    )
++    return config_path
++
++
+ def test_repository_dashboard_contract_is_valid() -> None:
+     result = run_validator(REPO_ROOT / "config" / "dashboard.yaml")
+ 
+@@ -34,32 +47,147 @@ def test_repository_dashboard_contract_is_valid() -> None:
+ 
+ 
+ def test_validator_rejects_panel_without_threshold(tmp_path: Path) -> None:
+-    payload = yaml.safe_load(
+-        (REPO_ROOT / "config" / "dashboard.yaml").read_text(encoding="utf-8")
+-    )
+-    del payload["dashboard"]["panels"][0]["threshold"]
+-    invalid_config = tmp_path / "dashboard.yaml"
+-    invalid_config.write_text(
+-        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8"
++    config_path = write_variant(
++        tmp_path, lambda dashboard: dashboard["panels"][0].pop("threshold")
+     )
+ 
+-    result = run_validator(invalid_config)
++    result = run_validator(config_path)
+ 
+     assert result.returncode == 1
+     assert "latency.threshold" in result.stdout
+ 
+ 
+-def test_validator_rejects_panel_without_query_example(tmp_path: Path) -> None:
+-    payload = yaml.safe_load(
+-        (REPO_ROOT / "config" / "dashboard.yaml").read_text(encoding="utf-8")
++def test_validator_rejects_panel_without_promql(tmp_path: Path) -> None:
++    config_path = write_variant(
++        tmp_path, lambda dashboard: dashboard["panels"][0].pop("queries", None)
+     )
+-    payload["dashboard"]["panels"][0].pop("query", None)
+-    invalid_config = tmp_path / "dashboard.yaml"
+-    invalid_config.write_text(
+-        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8"
++
++    result = run_validator(config_path)
++
++    assert result.returncode == 1
++    assert "latency.queries" in result.stdout
++
++
++def test_validator_rejects_aggregation_without_its_own_query(tmp_path: Path) -> None:
++    config_path = write_variant(
++        tmp_path, lambda dashboard: dashboard["panels"][0]["queries"].pop("p99")
+     )
+ 
+-    result = run_validator(invalid_config)
++    result = run_validator(config_path)
+ 
+     assert result.returncode == 1
+-    assert "latency.query" in result.stdout
++    assert "p99" in result.stdout
++
++
++def test_validator_rejects_promql_referencing_an_unexported_metric(tmp_path: Path) -> None:
++    def break_metric_name(dashboard: dict) -> None:
++        panel = dashboard["panels"][0]
++        panel["metrics"] = ["ai_request_latency_second_bucket"]
++        panel["queries"] = {
++            aggregation: query.replace(
++                "day13_ai_request_latency_seconds_bucket", "ai_request_latency_second_bucket"
++            )
++            for aggregation, query in panel["queries"].items()
++        }
++
++    config_path = write_variant(tmp_path, break_metric_name)
++
++    result = run_validator(config_path)
++
++    assert result.returncode == 1
++    assert "ai_request_latency_second_bucket" in result.stdout
++
++
++def test_validator_rejects_a_non_prometheus_datasource(tmp_path: Path) -> None:
++    config_path = write_variant(
++        tmp_path, lambda dashboard: dashboard.update({"datasource": "data/logs.jsonl"})
++    )
++
++    result = run_validator(config_path)
++
++    assert result.returncode == 1
++    assert "datasource" in result.stdout
++
++
++def test_shipped_alert_rules_are_complete() -> None:
++    """config/alert_rules.yaml đã có expr thật, không còn placeholder vector(0)."""
++    result = run_validator(REPO_ROOT / "config" / "dashboard.yaml", "--alerts")
++
++    assert result.returncode == 0
++    assert "CHƯA HOÀN THIỆN" not in result.stdout
++    assert "placeholder" not in result.stdout
++
++
++def test_placeholder_alert_rules_are_reported_as_incomplete(tmp_path: Path) -> None:
++    """Nếu ai đó trả expr về vector(0), validator phải bắt được ngay."""
++    rules_path = tmp_path / "alert_rules.yaml"
++    rules_path.write_text(
++        yaml.safe_dump(
++            {
++                "groups": [
++                    {
++                        "name": "day13-ai-observability",
++                        "rules": [
++                            {
++                                "alert": f"TODO_alert_{index}",
++                                "expr": "vector(0) > 1",
++                                "for": "5m",
++                                "labels": {"severity": "TODO", "owner": "TODO"},
++                                "annotations": {
++                                    "summary": "TODO",
++                                    "runbook_url": "docs/alerts.md",
++                                },
++                            }
++                            for index in range(1, 4)
++                        ],
++                    }
++                ]
++            },
++            sort_keys=False,
++        ),
++        encoding="utf-8",
++    )
++
++    result = run_validator(
++        REPO_ROOT / "config" / "dashboard.yaml", "--alerts", str(rules_path)
++    )
++
++    assert result.returncode == 1
++    assert "CHƯA HOÀN THIỆN" in result.stdout
++    assert "placeholder" in result.stdout
++
++
++def test_completed_alert_rules_pass(tmp_path: Path) -> None:
++    rules = {
++        "groups": [
++            {
++                "name": "day13-ai-observability",
++                "interval": "30s",
++                "rules": [
++                    {
++                        "alert": f"AiLatencyHigh{index}",
++                        "expr": (
++                            "histogram_quantile(0.95, sum by (le) "
++                            "(rate(day13_ai_request_latency_seconds_bucket[5m]))) > 3"
++                        ),
++                        "for": "5m",
++                        "labels": {"severity": "warning", "owner": "team-a"},
++                        "annotations": {
++                            "summary": "Người dùng chờ quá 3 giây ở p95",
++                            "runbook_url": "docs/alerts.md#alert-1",
++                        },
++                    }
++                    for index in range(3)
++                ],
++            }
++        ]
++    }
++    alerts_path = tmp_path / "alert_rules.yaml"
++    alerts_path.write_text(
++        yaml.safe_dump(rules, sort_keys=False, allow_unicode=True), encoding="utf-8"
++    )
++
++    result = run_validator(REPO_ROOT / "config" / "dashboard.yaml", "--alerts", str(alerts_path))
++
++    assert result.returncode == 0, result.stdout + result.stderr
++    assert "HỢP LỆ: mọi alert" in result.stdout
+diff --git a/tests/test_metrics.py b/tests/test_metrics.py
+index a7051ab..5960ce1 100644
+--- a/tests/test_metrics.py
++++ b/tests/test_metrics.py
+@@ -1,6 +1,13 @@
+ from prometheus_client import generate_latest
++from prometheus_client.parser import text_string_to_metric_families
+ 
+-from app.metrics import percentile, record_request
++from app.metrics import (
++    EXPORTED_METRICS,
++    is_exported_metric,
++    percentile,
++    record_error,
++    record_request,
++)
+ 
+ 
+ def test_percentile_basic() -> None:
+@@ -36,3 +43,51 @@ def test_known_feature_series_exist_before_their_first_request() -> None:
+ 
+     assert 'day13_ai_requests_total{feature="refund",status="success"} 0.0' in exposition
+     assert 'day13_ai_quality_score_count{feature="monitoring"} 0.0' in exposition
++
++
++# --- Contract giữa metric của app và dashboard/alert -------------------------
++
++
++def test_every_contract_metric_is_registered_in_the_app() -> None:
++    """Dashboard và alert chỉ được tham chiếu series mà app thực sự export."""
++    exposition = generate_latest().decode("utf-8")
++    registered = {family.name for family in text_string_to_metric_families(exposition)}
++
++    for metric in EXPORTED_METRICS:
++        # Parser bỏ hậu tố _total của counter khi đặt tên family.
++        assert metric in registered or metric.removesuffix("_total") in registered
++
++
++def test_is_exported_metric_accepts_histogram_sample_names() -> None:
++    assert is_exported_metric("day13_ai_request_latency_seconds_bucket")
++    assert is_exported_metric("day13_ai_quality_score_sum")
++    assert is_exported_metric("day13_ai_quality_score_count")
++    assert not is_exported_metric("day13_ai_request_latency_second_bucket")
++    assert not is_exported_metric("http_requests_total")
++
++
++def test_error_is_counted_in_both_numerator_and_denominator() -> None:
++    """Error rate là một tỉ lệ: một request lỗi vẫn phải làm tăng mẫu số."""
++    before = generate_latest().decode("utf-8")
++    record_error("TimeoutError", feature="qa")
++    after = generate_latest().decode("utf-8")
++
++    def sample(exposition: str, name: str, **labels: str) -> float:
++        return sum(
++            s.value
++            for family in text_string_to_metric_families(exposition)
++            for s in family.samples
++            if s.name == name
++            and all(s.labels.get(k) == v for k, v in labels.items())
++        )
++
++    assert (
++        sample(after, "day13_ai_requests_total", feature="qa", status="error")
++        - sample(before, "day13_ai_requests_total", feature="qa", status="error")
++        == 1
++    )
++    assert (
++        sample(after, "day13_ai_errors_total", feature="qa", error_type="TimeoutError")
++        - sample(before, "day13_ai_errors_total", feature="qa", error_type="TimeoutError")
++        == 1
++    )

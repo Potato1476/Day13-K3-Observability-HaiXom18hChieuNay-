@@ -1,0 +1,21 @@
+--- Prometheus Exposition Check ---
+Endpoint: http://127.0.0.1:8000/prometheus
+Số sample đọc được: 196
+day13_ai_requests_total: success=6 error=12
+day13_ai_request_latency_seconds: count=6 sum=0.910s
+day13_ai_tokens_total: input=153 output=709
+day13_ai_cost_usd_total: 0.011094
+day13_ai_quality_score: count=6 sum=4.80
+day13_ai_errors_total: 12
+
+--- Panel Readiness (Estimates) ---
++ [PASSED] panel traffic
++ [PASSED] panel latency
++ [PASSED] panel tokens
++ [PASSED] panel cost
++ [PASSED] panel quality
++ [PASSED] panel errors
+
+Estimated Score: 100/100
+
++ Prometheus target http://host.docker.internal:8000/prometheus: up

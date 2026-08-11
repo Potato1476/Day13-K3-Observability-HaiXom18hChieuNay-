@@ -1,0 +1,4 @@
+HỢP LỆ: 6/6 panel có trong dashboard contract và mọi PromQL đều dùng metric app đang export.
+
+--- Alert rules (3 alert) ---
+HỢP LỆ: mọi alert đã có expr PromQL, severity, owner, summary và runbook.
