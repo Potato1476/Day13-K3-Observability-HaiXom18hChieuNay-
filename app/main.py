@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from structlog.contextvars import bind_contextvars
 
 from .agent import LabAgent
@@ -11,30 +15,60 @@ from .incidents import disable, enable, status
 from .logging_config import configure_logging, get_logger
 from .metrics import record_error, snapshot
 from .middleware import CorrelationIdMiddleware
+from .otel_tracing import configure_otel_tracing, current_trace_context, otel_tracing_enabled
+from .observability_api import router as observability_router
 from .pii import hash_user_id, summarize_text
-from .schemas import ChatRequest, ChatResponse
+from .prompt_management import (
+    prompt_registry,
+    rollback_production_prompt,
+    set_prompt_label,
+)
+from .schemas import ChatRequest, ChatResponse, PromptLabelUpdate
 from .tracing import tracing_enabled
 
+configure_otel_tracing()
 configure_logging()
 log = get_logger()
-app = FastAPI(title="Day 13 Observability Lab")
-app.add_middleware(CorrelationIdMiddleware)
+STATIC_DIR = Path(__file__).with_name("static")
 agent = LabAgent()
 
 
-@app.on_event("startup")
-async def startup() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     log.info(
         "app_started",
         service=os.getenv("APP_NAME", "day13-observability-lab"),
         env=os.getenv("APP_ENV", "dev"),
-        payload={"tracing_enabled": tracing_enabled()},
+        payload={
+            "tracing_enabled": otel_tracing_enabled(),
+            "tracing_backend": "jaeger",
+            "langfuse_enabled": tracing_enabled(),
+        },
     )
+    yield
+
+
+app = FastAPI(title="Day 13 Observability Lab", lifespan=lifespan)
+app.add_middleware(CorrelationIdMiddleware)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(observability_router)
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True, "tracing_enabled": tracing_enabled(), "incidents": status()}
+    return {
+        "ok": True,
+        "tracing_enabled": otel_tracing_enabled(),
+        "tracing_backend": "jaeger",
+        "langfuse_enabled": tracing_enabled(),
+        "incidents": status(),
+        "prompt_registry": prompt_registry(),
+    }
+
+
+@app.get("/", include_in_schema=False)
+async def observability_console() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/metrics")
@@ -42,10 +76,57 @@ async def metrics() -> dict:
     return snapshot()
 
 
+@app.get("/prometheus", include_in_schema=False)
+async def prometheus_metrics() -> Response:
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/prompts")
+async def prompts() -> dict:
+    return prompt_registry()
+
+
+@app.post("/prompts/labels/{label}")
+async def update_prompt_label(label: str, body: PromptLabelUpdate) -> JSONResponse:
+    try:
+        result = set_prompt_label(label, body.version)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    log.info(
+        "prompt_label_updated",
+        service="control",
+        prompt_name=result["name"],
+        prompt_label=label,
+        prompt_version=body.version,
+        payload={"previous_version": result["previous_version"]},
+    )
+    return JSONResponse({"ok": True, **result})
+
+
+@app.post("/prompts/rollback")
+async def rollback_prompt() -> JSONResponse:
+    result = rollback_production_prompt()
+    log.warning(
+        "prompt_rollback",
+        service="control",
+        prompt_name=result["name"],
+        prompt_label="production",
+        prompt_version=result["version"],
+        payload={"previous_version": result["previous_version"]},
+    )
+    return JSONResponse({"ok": True, **result})
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
-    # TODO: Enrich logs with request context (user_id_hash, session_id, feature, model, env)
-    # bind_contextvars(...)
+    bind_contextvars(
+        user_id_hash=hash_user_id(body.user_id),
+        session_id=body.session_id,
+        feature=body.feature,
+        model=agent.model,
+        prompt_label=body.prompt_label,
+        env=os.getenv("APP_ENV", "dev"),
+    )
     
     log.info(
         "request_received",
@@ -58,6 +139,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
             feature=body.feature,
             session_id=body.session_id,
             message=body.message,
+            prompt_label=body.prompt_label,
         )
         log.info(
             "response_sent",
@@ -67,20 +149,29 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
             tokens_out=result.tokens_out,
             cost_usd=result.cost_usd,
             quality_score=result.quality_score,
+            prompt_name=result.prompt_name,
+            prompt_label=result.prompt_label,
+            prompt_version=result.prompt_version,
+            prompt_source=result.prompt_source,
             payload={"answer_preview": summarize_text(result.answer)},
         )
         return ChatResponse(
             answer=result.answer,
             correlation_id=request.state.correlation_id,
+            trace_id=current_trace_context().get("trace_id"),
             latency_ms=result.latency_ms,
             tokens_in=result.tokens_in,
             tokens_out=result.tokens_out,
             cost_usd=result.cost_usd,
             quality_score=result.quality_score,
+            prompt_name=result.prompt_name,
+            prompt_label=result.prompt_label,
+            prompt_version=result.prompt_version,
+            prompt_source=result.prompt_source,
         )
     except Exception as exc:  # pragma: no cover
         error_type = type(exc).__name__
-        record_error(error_type)
+        record_error(error_type, feature=body.feature)
         log.error(
             "request_failed",
             service="api",

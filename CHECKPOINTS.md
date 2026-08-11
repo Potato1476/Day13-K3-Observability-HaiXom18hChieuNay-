@@ -17,10 +17,10 @@
 ## Checkpoint 2 — 1:30–2:30: Metrics, traces và dashboard
 
 - Có ít nhất 10 traces với metadata.
-- Làm theo [docs/PROMPT_VERSIONING.md](docs/PROMPT_VERSIONING.md): có prompt v1/v2; trace hiển thị `prompt_name`, `prompt_label` và `prompt_version`.
+- Làm theo [báo cáo tổng hợp](submission/REPORT.md): có prompt v1/v2; trace hiển thị `prompt_name`, `prompt_label` và `prompt_version`.
 - Thực hiện được một lần đổi label hoặc rollback; không chấm chất lượng prompt.
 - `python scripts/validate_dashboard.py` báo hợp lệ.
-- Làm theo [docs/DASHBOARD_SETUP.md](docs/DASHBOARD_SETUP.md): dashboard thể hiện latency, traffic, error, token/cost và quality theo [`config/dashboard.yaml`](config/dashboard.yaml).
+- Làm theo [báo cáo tổng hợp](submission/REPORT.md): dashboard thể hiện latency, traffic, error, token/cost và quality theo [`config/dashboard.yaml`](config/dashboard.yaml).
 - Có SLO line hoặc threshold rõ ràng.
 - Chụp hai trace prompt, thao tác rollback, kết quả validator và dashboard vào `submission/evidence/`.
 

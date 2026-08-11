@@ -12,6 +12,18 @@ PII_DETECTORS = {
     "cccd": re.compile(r"\b\d{12}\b"),
     "credit_card": re.compile(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b"),
 }
+OPAQUE_TECHNICAL_FIELDS = {"trace_id", "span_id", "user_id_hash"}
+
+
+def pii_scan_view(record: dict) -> str:
+    """Serialize user-visible log content without random hexadecimal identifiers."""
+    content = {
+        key: value
+        for key, value in record.items()
+        if key not in OPAQUE_TECHNICAL_FIELDS
+    }
+    return json.dumps(content, ensure_ascii=False)
+
 
 def main() -> None:
     if not LOG_PATH.exists():
@@ -50,8 +62,9 @@ def main() -> None:
             if not ENRICHMENT_FIELDS.issubset(rec.keys()):
                 missing_enrichment += 1
 
-        # Check raw PII independently from the student's scrubbing implementation.
-        raw = json.dumps(rec, ensure_ascii=False)
+        # Check content independently from the app scrubber. Random trace/span IDs
+        # are excluded because digit runs inside hexadecimal IDs are not user PII.
+        raw = pii_scan_view(rec)
         detected_types = sorted(
             name for name, detector in PII_DETECTORS.items() if detector.search(raw)
         )

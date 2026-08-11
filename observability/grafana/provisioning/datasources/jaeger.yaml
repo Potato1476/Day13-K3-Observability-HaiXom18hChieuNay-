@@ -1,0 +1,23 @@
+apiVersion: 1
+
+prune: true
+
+datasources:
+  - name: Jaeger
+    uid: jaeger-day13
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    isDefault: false
+    editable: false
+    jsonData:
+      tracesToMetrics:
+        datasourceUid: prometheus-day13
+        spanStartTimeShift: -2m
+        spanEndTimeShift: 2m
+        tags:
+          - key: day13.feature
+            value: feature
+        queries:
+          - name: Request traffic
+            query: 'sum(rate(day13_ai_requests_total{$$__tags}[$$__rate_interval]))'

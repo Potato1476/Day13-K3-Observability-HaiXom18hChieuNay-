@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "day13-chat",
+  "versions": {
+    "local-v1": {
+      "description": "Baseline: context and question without extra response policy.",
+      "template": "Feature={{feature}}\nDocs={{docs}}\nQuestion={{message}}"
+    },
+    "local-v2": {
+      "description": "Candidate: concise answer policy and explicit evidence instruction.",
+      "template": "Feature={{feature}}\nDocs={{docs}}\nQuestion={{message}}\nInstructions=Answer in at most three concise sentences and cite the retrieved evidence."
+    }
+  },
+  "default_labels": {
+    "baseline": "local-v1",
+    "candidate": "local-v2",
+    "production": "local-v1"
+  }
+}

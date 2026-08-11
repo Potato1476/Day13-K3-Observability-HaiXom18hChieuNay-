@@ -66,7 +66,7 @@ def test_local_prompt_fallback_keeps_lab_runnable_without_langfuse() -> None:
 
 
 def test_langfuse_prompt_version_and_label_are_resolved(monkeypatch) -> None:
-    from app.prompt_management import DEFAULT_PROMPT_TEMPLATE, resolve_prompt
+    from app.prompt_management import prompt_registry, resolve_prompt
 
     monkeypatch.setenv("LANGFUSE_PROMPT_NAME", "day13-incident-assistant")
     monkeypatch.setenv("LANGFUSE_PROMPT_LABEL", "candidate")
@@ -85,7 +85,7 @@ def test_langfuse_prompt_version_and_label_are_resolved(monkeypatch) -> None:
         {
             "label": "candidate",
             "type": "text",
-            "fallback": DEFAULT_PROMPT_TEMPLATE,
+            "fallback": prompt_registry()["versions"]["local-v2"]["template"],
             "cache_ttl_seconds": 60,
             "fetch_timeout_seconds": 2,
             "max_retries": 0,
@@ -117,6 +117,37 @@ def test_prompt_fetch_failure_uses_visible_local_fallback() -> None:
     assert resolved.fetch_error == "TimeoutError"
     assert resolved.managed_prompt is None
     assert resolved.text == "Feature=qa\nDocs=Trace first\nQuestion=What happened?"
+
+
+def test_local_registry_supports_candidate_and_production_rollback(
+    monkeypatch, tmp_path
+) -> None:
+    from app import prompt_management
+
+    monkeypatch.setattr(
+        prompt_management,
+        "PROMPT_STATE_PATH",
+        tmp_path / "prompt_labels.json",
+    )
+
+    candidate = prompt_management.resolve_prompt(
+        UnexpectedPromptClient(),
+        feature="qa",
+        docs=["Trace evidence"],
+        message="What changed?",
+        enabled=False,
+        label_override="candidate",
+    )
+    assert candidate.version == "local-v2"
+    assert "three concise sentences" in candidate.text
+
+    promoted = prompt_management.set_prompt_label("production", "local-v2")
+    assert promoted["previous_version"] == "local-v1"
+    assert prompt_management.prompt_registry()["labels"]["production"] == "local-v2"
+
+    rolled_back = prompt_management.rollback_production_prompt()
+    assert rolled_back["version"] == "local-v1"
+    assert prompt_management.prompt_registry()["labels"]["production"] == "local-v1"
 
 
 def test_sdk_fallback_is_not_reported_as_managed_prompt() -> None:

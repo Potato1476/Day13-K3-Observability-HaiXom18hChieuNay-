@@ -3,6 +3,15 @@ from __future__ import annotations
 import os
 from typing import Any
 
+
+class _NoopLangfuseClient:
+    def update_current_trace(self, **kwargs: Any) -> None:
+        return None
+
+    def update_current_generation(self, **kwargs: Any) -> None:
+        return None
+
+
 try:
     from langfuse import get_client, observe
 
@@ -16,19 +25,12 @@ except ImportError:  # pragma: no cover - chỉ dùng khi chưa cài requirement
 
         return decorator
 
-    class _DummyClient:
-        def update_current_trace(self, **kwargs: Any) -> None:
-            return None
-
-        def update_current_generation(self, **kwargs: Any) -> None:
-            return None
-
     def get_client():
-        return _DummyClient()
+        return _NoopLangfuseClient()
 
 
 def get_langfuse_client():
-    return get_client()
+    return get_client() if tracing_enabled() else _NoopLangfuseClient()
 
 
 def tracing_enabled() -> bool:
