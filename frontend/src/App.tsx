@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import { SplineBackground } from './components/SplineBackground';
 import { HeaderNav, type NavTab } from './components/HeaderNav';
 import { MetricsOverview } from './components/MetricsOverview';
+import { IncidentPanel } from './components/IncidentPanel';
 import { StressTestPanel } from './components/StressTestPanel';
 import { GrafanaViewer } from './components/GrafanaViewer';
 import { LogsView } from './components/LogsView';
+import { PromptVersionPanel } from './components/PromptVersionPanel';
 import { TracesView } from './components/TracesView';
 import { defaultMotionSettings, type MotionSettings } from './components/MotionControlPanel';
 import { Sparkles, Activity, ShieldCheck } from 'lucide-react';
@@ -68,6 +70,9 @@ export const App: React.FC = () => {
               {/* Real-time Telemetry Metrics */}
               <MetricsOverview />
 
+              {/* Bật tắt ba kịch bản sự cố practice, trạng thái đọc từ API */}
+              <IncidentPanel />
+
               {/* Stress Test Engine with Button */}
               <StressTestPanel />
 
@@ -78,7 +83,13 @@ export const App: React.FC = () => {
 
           {activeTab === 'logs' && <LogsView />}
 
-          {activeTab === 'traces' && <TracesView />}
+          {activeTab === 'traces' && (
+            <>
+              {/* prompt_name / label / version / source + nút đổi label và rollback */}
+              <PromptVersionPanel />
+              <TracesView />
+            </>
+          )}
         </main>
 
         {/* Footer */}

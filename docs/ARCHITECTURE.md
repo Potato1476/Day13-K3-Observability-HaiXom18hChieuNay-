@@ -162,12 +162,22 @@ Cờ nằm trong bộ nhớ tiến trình nên restart uvicorn sẽ xoá trạng
 
 `frontend/` là một app Vite + React 19 dựng "observability studio" cho phần demo. Nó không nằm trong luồng chấm điểm và không được đưa vào `docker-compose.yml`.
 
-| Component | Làm gì |
-|---|---|
-| `MetricsOverview` | `fetch('/metrics')` rồi parse text exposition ngay trong trình duyệt |
-| `StressTestPanel` | Gọi `POST /stress-test` và bật/tắt incident |
-| `GrafanaViewer` | Nhúng dashboard Grafana và trang `/targets` bằng iframe |
-| `SplineHero` | Phần trang trí 3D |
+UI chia ba tab: **Metrics**, **Logs**, **Traces**.
+
+| Component | Tab | Làm gì | Endpoint |
+|---|---|---|---|
+| `MetricsOverview` | Metrics | Parse text exposition ngay trong trình duyệt | `GET /metrics` |
+| `IncidentPanel` | Metrics | Bật/tắt ba kịch bản sự cố bằng nút, trạng thái poll 5 giây | `GET /incidents`, `POST /incidents/{name}/{enable\|disable}` |
+| `StressTestPanel` | Metrics | Chạy tải theo concurrency và số request | `POST /stress-test` |
+| `GrafanaViewer` | Metrics | Nhúng dashboard Grafana và trang `/targets` | iframe |
+| `LogsView` | Logs | Đọc N log record gần nhất | `GET /logs` |
+| `PromptVersionPanel` | Traces | Hiện `prompt_name/label/version/source` và đổi label bằng nút | `GET /prompt`, `POST /prompt/label` |
+| `TracesView` | Traces | Trạng thái tracing và quy tắc metadata/PII | `GET /traces` |
+| `SplineBackground`, `HeaderNav` | — | Nền 3D và điều hướng | — |
+
+Hai panel điều khiển đọc trạng thái từ API chứ không giữ state riêng, nên UI không bao giờ hiển thị khác với server. `PromptVersionPanel` phân biệt rõ ba giá trị `prompt_source`: `langfuse` là prompt managed thật, `local` là chưa bật tracing, `local-fallback` là đã bật nhưng fetch hỏng — đúng ba trường hợp mô tả trong [GUIDE.md](GUIDE.md).
+
+`POST /prompt/label` chỉ đổi `LANGFUSE_PROMPT_LABEL` trong tiến trình đang chạy; `.env` không bị ghi đè nên restart sẽ quay về giá trị ban đầu. Mỗi lần đổi ghi một log `prompt_label_changed` kèm label cũ, label mới và version — dùng trực tiếp làm evidence rollback.
 
 Vì frontend gọi API từ origin khác, `main.py` bật `CORSMiddleware` với `allow_origins=["*"]`. Chấp nhận được cho lab chạy local; không mang cấu hình này lên môi trường thật.
 

@@ -13,11 +13,12 @@ from pydantic import BaseModel, Field
 from .agent import LabAgent
 from .incidents import disable, enable, status
 from .logging_config import configure_logging, get_logger
-from .metrics import record_error, render_latest
+from .metrics import record_error, render_latest, REQUESTS, LATENCY, ERRORS, TOKENS, COST, QUALITY
 from .middleware import CorrelationIdMiddleware
 from .pii import hash_user_id, summarize_text
+from .prompt_management import resolve_prompt
 from .schemas import ChatRequest, ChatResponse
-from .tracing import tracing_enabled
+from .tracing import get_langfuse_client, tracing_enabled
 
 configure_logging()
 log = get_logger()
@@ -26,7 +27,7 @@ app = FastAPI(title="Day 13 Observability Lab")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -37,6 +38,36 @@ agent = LabAgent()
 class StressTestRequest(BaseModel):
     concurrency: int = Field(default=5, ge=1, le=50)
     requests: int = Field(default=20, ge=1, le=200)
+
+
+class PromptLabelRequest(BaseModel):
+    label: str = Field(..., min_length=1, max_length=64, examples=["production", "baseline", "candidate"])
+
+
+# Label dùng trong docs/PROMPT_VERSIONING.md; UI hiển thị đúng ba nút này.
+PROMPT_LABELS = ("baseline", "candidate", "production")
+
+
+def _resolve_current_prompt() -> dict:
+    """Giải prompt hiện tại đúng cách agent làm, để UI thấy cùng một kết quả."""
+    prompt = resolve_prompt(
+        get_langfuse_client(),
+        feature="qa",
+        docs=["Prompt version probe"],
+        message="Which prompt version is active?",
+        enabled=tracing_enabled(),
+    )
+    return {
+        "ok": True,
+        "tracing_enabled": tracing_enabled(),
+        "prompt_name": prompt.name,
+        "prompt_label": prompt.label,
+        "prompt_version": prompt.version,
+        "prompt_source": prompt.source,
+        "fetch_error": prompt.fetch_error,
+        "available_labels": list(PROMPT_LABELS),
+        "host": os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+    }
 
 
 @app.on_event("startup")
@@ -52,6 +83,11 @@ async def startup() -> None:
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True, "tracing_enabled": tracing_enabled(), "incidents": status()}
+
+
+@app.get("/incidents")
+async def get_incidents() -> dict:
+    return {"ok": True, "incidents": status()}
 
 
 @app.get("/logs")
@@ -79,6 +115,79 @@ async def get_traces() -> dict:
         "prompt_label": os.getenv("LANGFUSE_PROMPT_LABEL", "production"),
         "host": os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
     }
+
+
+@app.get("/prompt")
+async def get_prompt() -> dict:
+    """Prompt name/label/version/source đang có hiệu lực, đọc trực tiếp từ Langfuse."""
+    return _resolve_current_prompt()
+
+
+@app.post("/prompt/label")
+async def set_prompt_label(body: PromptLabelRequest) -> JSONResponse:
+    """Đổi label đang dùng để demo switch và rollback mà không phải restart API.
+
+    Chỉ đổi trong tiến trình đang chạy; `.env` không bị ghi đè, nên restart sẽ
+    quay lại LANGFUSE_PROMPT_LABEL ban đầu.
+    """
+    previous = os.getenv("LANGFUSE_PROMPT_LABEL", "production")
+    os.environ["LANGFUSE_PROMPT_LABEL"] = body.label
+    resolved = _resolve_current_prompt()
+    log.warning(
+        "prompt_label_changed",
+        service="control",
+        payload={
+            "from_label": previous,
+            "to_label": body.label,
+            "prompt_version": resolved["prompt_version"],
+            "prompt_source": resolved["prompt_source"],
+        },
+    )
+    return JSONResponse({**resolved, "previous_label": previous})
+
+
+@app.get("/incidents")
+async def get_incidents() -> dict:
+    return {"ok": True, "incidents": status()}
+
+
+@app.get("/telemetry")
+async def get_telemetry() -> dict:
+    try:
+        req_samples = REQUESTS.collect()[0].samples if REQUESTS.collect() else []
+        req_success = sum(m.value for m in req_samples if m.name == "ai_requests_total" and m.labels.get("status") == "success")
+        req_error = sum(m.value for m in req_samples if m.name == "ai_requests_total" and m.labels.get("status") == "error")
+
+        lat_samples = LATENCY.collect()[0].samples if LATENCY.collect() else []
+        lat_sum = sum(m.value for m in lat_samples if m.name == "ai_request_latency_seconds_sum")
+        lat_count = sum(m.value for m in lat_samples if m.name == "ai_request_latency_seconds_count")
+
+        tok_samples = TOKENS.collect()[0].samples if TOKENS.collect() else []
+        tokens_in = sum(m.value for m in tok_samples if m.name == "ai_tokens_total" and m.labels.get("direction") == "input")
+        tokens_out = sum(m.value for m in tok_samples if m.name == "ai_tokens_total" and m.labels.get("direction") == "output")
+
+        cost_samples = COST.collect()[0].samples if COST.collect() else []
+        cost_usd = sum(m.value for m in cost_samples if m.name == "ai_cost_usd_total")
+
+        qual_samples = QUALITY.collect()[0].samples if QUALITY.collect() else []
+        qual_sum = sum(m.value for m in qual_samples if m.name == "ai_quality_score_sum")
+        qual_count = sum(m.value for m in qual_samples if m.name == "ai_quality_score_count")
+
+        avg_lat_ms = (lat_sum / lat_count * 1000) if lat_count > 0 else 0.0
+        avg_qual = (qual_sum / qual_count) if qual_count > 0 else 0.0
+
+        return {
+            "ok": True,
+            "requests": int(req_success + req_error),
+            "errors": int(req_error),
+            "avg_latency_ms": round(avg_lat_ms, 2),
+            "tokens_in": int(tokens_in),
+            "tokens_out": int(tokens_out),
+            "cost_usd": round(cost_usd, 6),
+            "quality_score": round(avg_qual, 2)
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/metrics")

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { GitCommit, ExternalLink, ShieldCheck, Tag, Layers } from 'lucide-react';
+import { GitCommit, ExternalLink, ShieldCheck } from 'lucide-react';
 
 interface TracesState {
   ok: boolean;
@@ -56,25 +56,6 @@ export const TracesView: React.FC = () => {
           </span>
         </div>
 
-        <div style={{ background: 'rgba(9, 13, 22, 0.6)', padding: '1.25rem', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', color: '#94a3b8', fontSize: '0.85rem' }}>
-            <Tag style={{ width: 16, height: 16, color: '#06b6d4' }} /> Prompt Name
-          </div>
-          <p style={{ fontSize: '1.25rem', fontWeight: 700, color: '#06b6d4' }}>
-            {traceState?.prompt_name || 'day13-chat'}
-          </p>
-          <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Managed prompt key</span>
-        </div>
-
-        <div style={{ background: 'rgba(9, 13, 22, 0.6)', padding: '1.25rem', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', color: '#94a3b8', fontSize: '0.85rem' }}>
-            <Layers style={{ width: 16, height: 16, color: '#818cf8' }} /> Active Label / Version
-          </div>
-          <p style={{ fontSize: '1.25rem', fontWeight: 700, color: '#818cf8' }}>
-            {traceState?.prompt_label || 'production'}
-          </p>
-          <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Prompt release tag</span>
-        </div>
       </div>
 
       <div style={{ background: 'rgba(9, 13, 22, 0.6)', padding: '1.25rem', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>

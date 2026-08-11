@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Zap, Play, Flame, ShieldAlert, RotateCcw } from 'lucide-react';
+import { Zap, Play, RotateCcw } from 'lucide-react';
 
 export const StressTestPanel: React.FC<{ onTestComplete?: () => void }> = ({ onTestComplete }) => {
   const [concurrency, setConcurrency] = useState(10);
@@ -11,7 +11,6 @@ export const StressTestPanel: React.FC<{ onTestComplete?: () => void }> = ({ onT
     failed: number;
     avg_latency_ms: number;
   } | null>(null);
-  const [activeIncident, setActiveIncident] = useState<string | null>(null);
 
   const handleRunTest = async () => {
     setRunning(true);
@@ -29,24 +28,6 @@ export const StressTestPanel: React.FC<{ onTestComplete?: () => void }> = ({ onT
       console.error('Stress test failed', e);
     } finally {
       setRunning(false);
-    }
-  };
-
-  const toggleIncident = async (name: string) => {
-    try {
-      if (activeIncident === name) {
-        await fetch(`http://127.0.0.1:8000/incidents/${name}/disable`, { method: 'POST' });
-        setActiveIncident(null);
-      } else {
-        if (activeIncident) {
-          await fetch(`http://127.0.0.1:8000/incidents/${activeIncident}/disable`, { method: 'POST' });
-        }
-        await fetch(`http://127.0.0.1:8000/incidents/${name}/enable`, { method: 'POST' });
-        setActiveIncident(name);
-      }
-      if (onTestComplete) onTestComplete();
-    } catch (e) {
-      console.error('Incident toggle failed', e);
     }
   };
 
@@ -112,36 +93,6 @@ export const StressTestPanel: React.FC<{ onTestComplete?: () => void }> = ({ onT
             onChange={(e) => setRequests(parseInt(e.target.value))}
             style={{ width: '100%', accentColor: '#06b6d4', cursor: 'pointer' }}
           />
-        </div>
-      </div>
-
-      {/* Incident Injectors */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <span style={{ fontSize: '0.85rem', color: '#94a3b8', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>
-          Inject Incident Scenarios (Practice Failure Simulations):
-        </span>
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => toggleIncident('rag_slow')}
-            className={`btn ${activeIncident === 'rag_slow' ? 'btn-danger' : 'btn-secondary'}`}
-            style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem' }}
-          >
-            <Flame style={{ width: 14, height: 14 }} /> RAG Slow (+3s Latency)
-          </button>
-          <button
-            onClick={() => toggleIncident('tool_fail')}
-            className={`btn ${activeIncident === 'tool_fail' ? 'btn-danger' : 'btn-secondary'}`}
-            style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem' }}
-          >
-            <ShieldAlert style={{ width: 14, height: 14 }} /> Tool Fail (500 Error Spike)
-          </button>
-          <button
-            onClick={() => toggleIncident('cost_spike')}
-            className={`btn ${activeIncident === 'cost_spike' ? 'btn-danger' : 'btn-secondary'}`}
-            style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem' }}
-          >
-            <Zap style={{ width: 14, height: 14 }} /> Cost Spike
-          </button>
         </div>
       </div>
 

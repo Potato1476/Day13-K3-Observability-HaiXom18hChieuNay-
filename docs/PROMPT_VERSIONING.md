@@ -32,6 +32,18 @@ Nếu Langfuse không khả dụng, app dùng template local và trace metadata 
 
 Không chấm prompt nào “hay hơn”. Điểm nằm ở khả năng truy xuất version, đổi label và rollback có bằng chứng.
 
+## Đổi label bằng UI
+
+Tab **Traces** của `frontend/` có panel *Prompt Version Control* làm được bước 3 và bước 5 mà không phải sửa `.env` rồi restart API:
+
+- Panel hiện `prompt_name`, `prompt_label`, `prompt_version` và `prompt_source` đang có hiệu lực.
+- Ba nút `baseline` / `candidate` / `production` gọi `POST /prompt/label` để đổi label ngay trong tiến trình.
+- Mỗi lần đổi ghi một log `prompt_label_changed` chứa label cũ, label mới và version — dùng làm evidence rollback.
+
+Label đổi theo cách này không được ghi vào `.env`, nên restart API sẽ quay lại giá trị ban đầu. Việc tạo version và gắn label trên Langfuse vẫn phải làm trong Langfuse UI; panel chỉ chọn label nào đang được dùng.
+
+Nếu panel hiện `prompt_source=local-fallback`, prompt hoặc label đó chưa tồn tại trên project — tạo trước trong Langfuse rồi bấm Refresh.
+
 ## Evidence
 
 - Một ảnh danh sách hai prompt version.

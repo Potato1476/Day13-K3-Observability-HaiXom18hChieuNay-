@@ -20,8 +20,28 @@ export const MetricsOverview: React.FC = () => {
     if (loading) return; // Prevent duplicate concurrent refresh calls
     setLoading(true);
     try {
-      const res = await fetch('http://127.0.0.1:8000/metrics');
-      const text = await res.text();
+      // 1. Try real JSON telemetry endpoint from FastAPI backend
+      const res = await fetch('http://127.0.0.1:8000/telemetry');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok) {
+          setMetrics({
+            requests: data.requests,
+            errors: data.errors,
+            avgLatencyMs: data.avg_latency_ms,
+            tokensIn: data.tokens_in,
+            tokensOut: data.tokens_out,
+            costUsd: data.cost_usd,
+            qualityScore: data.quality_score,
+          });
+          setLastUpdated(new Date().toLocaleTimeString());
+          return;
+        }
+      }
+
+      // 2. Fallback to parsing Prometheus /metrics exposition format
+      const prometheusRes = await fetch('http://127.0.0.1:8000/metrics');
+      const text = await prometheusRes.text();
       
       let reqCount = 0;
       let errCount = 0;
@@ -95,7 +115,7 @@ export const MetricsOverview: React.FC = () => {
 
   useEffect(() => {
     fetchMetrics();
-    const interval = setInterval(fetchMetrics, 5000);
+    const interval = setInterval(fetchMetrics, 3000);
     return () => clearInterval(interval);
   }, []);
 
@@ -150,7 +170,7 @@ export const MetricsOverview: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
         <div>
           <h2 style={{ fontSize: '1.35rem', fontWeight: 700, color: '#f8fafc' }}>Real-Time Metric Telemetry</h2>
-          <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>Live observations scraped directly from /metrics endpoint</p>
+          <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>Live observations directly from FastAPI backend Prometheus counters</p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>

@@ -134,5 +134,7 @@ Sau đó mở http://localhost:9090/targets và xác nhận target `day13-lab-ap
 - Prometheus không khởi động sau khi bạn sửa alert: chạy `docker compose logs prometheus`; lỗi cú pháp trong `config/alert_rules.yaml` sẽ chặn startup.
 - Sửa file trong `config/` nhưng Prometheus không thấy thay đổi: dùng `docker compose restart prometheus`, đừng chỉ gọi `POST /-/reload`. Editor lưu kiểu atomic sẽ đổi inode của file sau mỗi lần lưu.
 - Không thấy trace: kiểm tra ba biến `LANGFUSE_*`, sau đó khởi động lại API.
-- Trace ghi `prompt_source=local-fallback`: kiểm tra host/key và prompt name/label trong `.env`.
+- Trace ghi `prompt_source=local-fallback`: kiểm tra host/key và prompt name/label trong `.env`. Panel *Prompt Version Control* hiện `fetch_error`; phân biệt hai nguyên nhân hay gặp nhất bằng cách chạy `python scripts/check_langfuse.py`.
+- Langfuse trả `401 Invalid credentials. Confirm that you've configured the correct host`: key đúng nhưng sai region. Langfuse Cloud có hai region tách biệt — key tạo ở US không dùng được với `https://cloud.langfuse.com` và ngược lại. Đổi `LANGFUSE_HOST` sang `https://us.cloud.langfuse.com` rồi khởi động lại API.
+- Langfuse trả `404 Prompt not found`: kết nối đã đúng, chỉ là prompt chưa được tạo. Làm theo [docs/PROMPT_VERSIONING.md](docs/PROMPT_VERSIONING.md).
 - Challenge chưa chạy: chờ Lab Coach release `config/challenge.json`.
