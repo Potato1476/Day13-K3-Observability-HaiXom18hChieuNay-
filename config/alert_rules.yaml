@@ -1,19 +1,19 @@
 alerts:
-  - name: TODO_alert_1
-    severity: TODO
-    condition: TODO
+  - name: HighLatencyAlert
+    severity: warning
+    condition: latency_p95_ms > 3000 for 5m
     type: symptom-based
-    owner: TODO
+    owner: Nguyen Tuan Anh
     runbook: docs/alerts.md#alert-1
-  - name: TODO_alert_2
-    severity: TODO
-    condition: TODO
+  - name: HighErrorRateAlert
+    severity: critical
+    condition: error_rate_pct > 2 for 3m
     type: symptom-based
-    owner: TODO
+    owner: Nguyen Tuan Anh
     runbook: docs/alerts.md#alert-2
-  - name: TODO_alert_3
-    severity: TODO
-    condition: TODO
+  - name: LowQualityAlert
+    severity: warning
+    condition: quality_score_avg < 0.75 for 10m
     type: symptom-based
-    owner: TODO
+    owner: Nguyen Tuan Anh
     runbook: docs/alerts.md#alert-3
