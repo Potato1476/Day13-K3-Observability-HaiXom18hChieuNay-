@@ -22,6 +22,28 @@ app.add_middleware(CorrelationIdMiddleware)
 agent = LabAgent()
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return a correlated response for exceptions not handled by an endpoint."""
+    error_type = type(exc).__name__
+    correlation_id = getattr(request.state, "correlation_id", "unknown")
+    record_error(error_type)
+    log.error(
+        "request_failed",
+        service="api",
+        error_type=error_type,
+        payload={"path": request.url.path},
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "InternalServerError",
+            "correlation_id": correlation_id,
+        },
+        headers={"x-request-id": correlation_id},
+    )
+
+
 @app.on_event("startup")
 async def startup() -> None:
     log.info(
