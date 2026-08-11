@@ -4,18 +4,21 @@
 
 ## Nội dung bắt buộc
 
-- Source đã hoàn thiện trong `app/`, `config/`, `scripts/` và `tests/`.
+- Source đã hoàn thiện trong `app/`, `config/`, `grafana/`, `scripts/` và `tests/`.
 - `submission/REPORT.md` đã điền đầy đủ.
 - Evidence đặt trong `submission/evidence/`:
   - kết quả `validate_logs.py`;
+  - kết quả `validate_metrics.py`;
+  - ảnh Prometheus `/targets` với target `UP`;
   - danh sách tối thiểu 10 traces;
   - một trace waterfall;
   - hai prompt version và trace gắn đúng version/label;
   - một bằng chứng đổi label hoặc rollback prompt;
   - log có correlation ID;
   - bằng chứng PII đã được redact;
-  - kết quả `python scripts/validate_dashboard.py`;
-  - dashboard đủ 6 nhóm chỉ số;
+  - kết quả `python scripts/validate_dashboard.py --alerts`;
+  - dashboard Grafana đủ 6 nhóm chỉ số;
+  - ảnh Prometheus `/rules` với ba alert đã nạp;
   - bằng chứng điều tra challenge.
 
 ## Không được nộp
@@ -31,6 +34,8 @@
 ```bash
 python -m pytest -q
 python scripts/validate_logs.py
+python scripts/validate_metrics.py
+python scripts/validate_dashboard.py --alerts
 git status --short
 ```
 

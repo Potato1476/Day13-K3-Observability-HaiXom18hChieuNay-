@@ -1,0 +1,52 @@
+name: day13-observability
+
+# Stack quan sát của lab: Prometheus thu thập metrics từ API chạy trên host,
+# Grafana đọc Prometheus để vẽ 6 panel trong config/dashboard.yaml.
+#
+#   docker compose up -d
+#   Prometheus  http://localhost:9090
+#   Grafana     http://localhost:3001  (admin / admin)
+#
+# Grafana map ra cổng 3001 để không đụng cổng 3000 của Langfuse local.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: day13-prometheus
+    command:
+      - --config.file=/etc/prometheus/lab/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=6h
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      # Mount cả thư mục config/, không mount từng file. Hầu hết editor lưu file
+      # theo kiểu atomic (ghi file tạm rồi rename), việc đó đổi inode và làm
+      # bind mount theo file trỏ vào inode cũ: Prometheus không thấy thay đổi,
+      # thậm chí không restart được. Mount thư mục thì inode luôn ổn định.
+      - ./config:/etc/prometheus/lab:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # Cho phép container gọi ngược về uvicorn đang chạy trên máy host.
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: day13-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  prometheus-data:
+  grafana-data:

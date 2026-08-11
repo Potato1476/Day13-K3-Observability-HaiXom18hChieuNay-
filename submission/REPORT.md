@@ -10,9 +10,10 @@
 ## 2. Kết quả kỹ thuật
 
 - Điểm `validate_logs.py`:
+- Điểm `validate_metrics.py`:
 - Tổng số traces:
 - Số PII leak còn lại:
-- Link/đường dẫn dashboard:
+- Link/đường dẫn dashboard Grafana:
 
 ## 3. Logging và tracing
 
@@ -29,17 +30,20 @@
 - Trace ID của mỗi version:
 - Bằng chứng đổi label hoặc rollback:
 
-## 5. Dashboard, SLO và alerts
+## 5. Metrics, dashboard, SLO và alerts
 
-- Kết quả `validate_dashboard.py`:
-- Evidence dashboard:
+- Kết quả `validate_metrics.py`:
+- Bucket latency đã chọn và lý do:
+- Kết quả `validate_dashboard.py --alerts`:
+- Evidence dashboard Grafana (đủ 6 panel, có đơn vị và threshold):
+- PromQL của từng panel:
 - SLO đã chọn và lý do:
-- Alert rules và runbook:
+- Alert rules Prometheus, runbook và ảnh `/rules`:
 
 ## 6. Điều tra challenge
 
 - Challenge ID:
-- Triệu chứng từ metrics:
+- Triệu chứng từ panel Grafana (kèm câu PromQL đã dùng):
 - Trace ID liên quan:
 - Log line/correlation ID liên quan:
 - Root cause:

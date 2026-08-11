@@ -5,8 +5,8 @@
 ### A1. Triển khai kỹ thuật — 30 điểm
 
 - 10 điểm: JSON logging, correlation ID, metadata và PII redaction đúng.
-- 10 điểm: traces đầy đủ; prompt v1/v2 có label, version metadata và bằng chứng rollback.
-- 10 điểm: dashboard contract/validator, 6 panel, SLO, alert rules và runbook hợp lý.
+- 10 điểm: instrumentation Prometheus đúng (counter/histogram, label, đơn vị giây); traces đầy đủ; prompt v1/v2 có label, version metadata và bằng chứng rollback.
+- 10 điểm: dashboard contract/validator, 6 panel Grafana đúng PromQL và đơn vị, SLO, alert rules Prometheus và runbook hợp lý.
 
 ### A2. Điều tra incident — 10 điểm
 
@@ -25,7 +25,7 @@
 ### B1. Báo cáo và mức độ hiểu bài — 20 điểm
 
 - Mô tả rõ phần việc cá nhân.
-- Trả lời được câu hỏi về logging, tracing, prompt version, PII, percentile hoặc alert liên quan đến phần việc.
+- Trả lời được câu hỏi về logging, tracing, prompt version, PII, PromQL/histogram hoặc alert liên quan đến phần việc.
 
 ### B2. Bằng chứng đóng góp — 20 điểm
 

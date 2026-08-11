@@ -12,6 +12,23 @@ Xác định metadata nào thuộc toàn request và metadata nào chỉ xuất 
 
 Kiểm tra thứ tự processor: dữ liệu phải được scrub trước khi JSON được render và ghi xuống file. Thử với email, số điện thoại và số thẻ mẫu.
 
+## Khi panel Grafana báo `No data`
+
+Đi ngược đường dữ liệu, dừng ở chặng đầu tiên bị đứt:
+
+1. `python scripts/validate_metrics.py` — series đã tồn tại chưa? Nếu chưa, TODO trong `app/metrics.py` chưa xong.
+2. `curl http://127.0.0.1:8000/metrics | grep ai_` — app có export đúng tên metric không?
+3. http://localhost:9090/targets — target `day13-lab-api` có `UP` không? `connection refused` nghĩa là uvicorn đang bind `127.0.0.1` thay vì `0.0.0.0`.
+4. http://localhost:9090/graph — chạy thẳng câu PromQL. Nếu Prometheus trả rỗng thì lỗi nằm ở query, không nằm ở Grafana.
+5. Time range của panel: counter mới tăng vài giây thì `rate(...[5m])` cần thời gian mới có số.
+
+## Khi số trên panel trông vô lý
+
+- Đường cost hoặc token chỉ đi lên và không bao giờ xuống: bạn đang vẽ thẳng counter. Bọc trong `rate()` hoặc `increase()`.
+- Latency ra 0.15 trong khi log ghi 150: Prometheus dùng giây, log dùng mili giây. Đúng rồi, đổi đơn vị panel chứ đừng đổi code.
+- P99 đứng yên ở một giá trị tròn: percentile đang bị chặn bởi bucket lớn nhất. Xem lại `LATENCY_BUCKETS_SECONDS`.
+- Error rate luôn 0% dù có lỗi: mẫu số đúng nhưng tử số thiếu, hoặc `record_error` chưa đếm request lỗi vào `ai_requests_total`.
+
 ## Khi metrics báo xấu nhưng chưa biết nguyên nhân
 
 1. Dùng metrics xác định khoảng thời gian và loại triệu chứng.
@@ -24,7 +41,7 @@ Kiểm tra thứ tự processor: dữ liệu phải được scrub trước khi 
 
 Mỗi panel cần tên, đơn vị, khoảng thời gian và threshold. Ưu tiên 6 panel chính thay vì thêm nhiều biểu đồ không phục vụ quyết định.
 
-Chạy `python scripts/validate_dashboard.py` trước. Nếu validator qua nhưng dashboard vẫn sai, đối chiếu từng event/field với bảng trong [DASHBOARD_SETUP.md](DASHBOARD_SETUP.md), đặc biệt `response_sent.latency_ms` và `response_sent.quality_score`.
+Chạy `python scripts/validate_dashboard.py --alerts` trước. Nếu validator qua nhưng dashboard vẫn sai, đối chiếu từng metric và câu PromQL với bảng trong [DASHBOARD_SETUP.md](DASHBOARD_SETUP.md), đặc biệt `ai_request_latency_seconds_bucket` và cặp `ai_quality_score_sum`/`ai_quality_score_count`.
 
 ## Khi prompt luôn hiện `local-v1`
 

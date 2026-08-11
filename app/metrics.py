@@ -1,52 +1,120 @@
 from __future__ import annotations
 
-from collections import Counter
-from statistics import mean
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
-REQUEST_LATENCIES: list[int] = []
-REQUEST_COSTS: list[float] = []
-REQUEST_TOKENS_IN: list[int] = []
-REQUEST_TOKENS_OUT: list[int] = []
-ERRORS: Counter[str] = Counter()
-TRAFFIC: int = 0
-QUALITY_SCORES: list[float] = []
+# Prometheus dùng giây cho latency và hậu tố _total cho counter.
+# Giữ nguyên tên metric ở đây: config/dashboard.yaml và config/alert_rules.yaml
+# đều tham chiếu đúng những tên này, và validator sẽ đối chiếu lại.
 
+LATENCY_BUCKETS_SECONDS = (
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    1.0,
+    1.5,
+    2.0,
+    2.5,
+    3.0,
+    5.0,
+    10.0,
+)
+QUALITY_BUCKETS = (0.2, 0.4, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0)
 
-def record_request(latency_ms: int, cost_usd: float, tokens_in: int, tokens_out: int, quality_score: float) -> None:
-    global TRAFFIC
-    TRAFFIC += 1
-    REQUEST_LATENCIES.append(latency_ms)
-    REQUEST_COSTS.append(cost_usd)
-    REQUEST_TOKENS_IN.append(tokens_in)
-    REQUEST_TOKENS_OUT.append(tokens_out)
-    QUALITY_SCORES.append(quality_score)
+REQUESTS = Counter(
+    "ai_requests_total",
+    "Số request đã xử lý, tách theo trạng thái success/error.",
+    ["feature", "model", "status"],
+)
+LATENCY = Histogram(
+    "ai_request_latency_seconds",
+    "Latency end-to-end của một request, tính bằng giây.",
+    ["feature", "model"],
+    buckets=LATENCY_BUCKETS_SECONDS,
+)
+ERRORS = Counter(
+    "ai_errors_total",
+    "Số lỗi tách theo loại exception.",
+    ["feature", "error_type"],
+)
+TOKENS = Counter(
+    "ai_tokens_total",
+    "Tổng token, tách theo direction=input|output.",
+    ["feature", "model", "direction"],
+)
+COST = Counter(
+    "ai_cost_usd_total",
+    "Tổng chi phí ước tính, tính bằng USD.",
+    ["feature", "model"],
+)
+QUALITY = Histogram(
+    "ai_quality_score",
+    "Quality proxy trong khoảng 0..1.",
+    ["feature"],
+    buckets=QUALITY_BUCKETS,
+)
 
-
-
-def record_error(error_type: str) -> None:
-    ERRORS[error_type] += 1
-
-
-
-def percentile(values: list[int], p: int) -> float:
-    if not values:
-        return 0.0
-    items = sorted(values)
-    idx = max(0, min(len(items) - 1, round((p / 100) * len(items) + 0.5) - 1))
-    return float(items[idx])
-
-
-
-def snapshot() -> dict:
-    return {
-        "traffic": TRAFFIC,
-        "latency_p50": percentile(REQUEST_LATENCIES, 50),
-        "latency_p95": percentile(REQUEST_LATENCIES, 95),
-        "latency_p99": percentile(REQUEST_LATENCIES, 99),
-        "avg_cost_usd": round(mean(REQUEST_COSTS), 4) if REQUEST_COSTS else 0.0,
-        "total_cost_usd": round(sum(REQUEST_COSTS), 4),
-        "tokens_in_total": sum(REQUEST_TOKENS_IN),
-        "tokens_out_total": sum(REQUEST_TOKENS_OUT),
-        "error_breakdown": dict(ERRORS),
-        "quality_avg": round(mean(QUALITY_SCORES), 4) if QUALITY_SCORES else 0.0,
+# Tên series được phép dùng trong dashboard và alert. Histogram còn sinh thêm
+# các sample _bucket, _sum và _count từ cùng một tên gốc.
+EXPORTED_METRICS = frozenset(
+    {
+        "ai_requests_total",
+        "ai_request_latency_seconds",
+        "ai_errors_total",
+        "ai_tokens_total",
+        "ai_cost_usd_total",
+        "ai_quality_score",
     }
+)
+_HISTOGRAM_SUFFIXES = ("_bucket", "_sum", "_count")
+
+
+def is_exported_metric(name: str) -> bool:
+    if name in EXPORTED_METRICS:
+        return True
+    return any(
+        name.endswith(suffix) and name[: -len(suffix)] in EXPORTED_METRICS
+        for suffix in _HISTOGRAM_SUFFIXES
+    )
+
+
+def record_request(
+    *,
+    feature: str,
+    model: str,
+    latency_ms: int,
+    cost_usd: float,
+    tokens_in: int,
+    tokens_out: int,
+    quality_score: float,
+) -> None:
+    # Ví dụ mẫu: traffic panel chỉ cần counter này.
+    REQUESTS.labels(feature=feature, model=model, status="success").inc()
+
+    # Ghi latency vào histogram. Prometheus dùng GIÂY, không phải mili giây.
+    LATENCY.labels(feature=feature, model=model).observe(latency_ms / 1000)
+
+    # Cộng token vào counter theo hai direction riêng biệt.
+    TOKENS.labels(feature=feature, model=model, direction="input").inc(tokens_in)
+    TOKENS.labels(feature=feature, model=model, direction="output").inc(tokens_out)
+
+    # Cộng chi phí của request vào counter cost.
+    COST.labels(feature=feature, model=model).inc(cost_usd)
+
+    # Ghi quality proxy vào histogram để panel quality tính được mean.
+    QUALITY.labels(feature=feature).observe(quality_score)
+
+
+def record_error(error_type: str, feature: str = "unknown", model: str = "unknown") -> None:
+    # Một request lỗi vẫn là một request. Nếu không đếm nó ở đây thì
+    # mẫu số của error rate sẽ sai và panel errors luôn báo 0%.
+    REQUESTS.labels(feature=feature, model=model, status="error").inc()
+
+    # Đếm lỗi theo error_type để vẽ được breakdown.
+    ERRORS.labels(feature=feature, error_type=error_type).inc()
+
+
+def render_latest() -> tuple[bytes, str]:
+    """Trả về payload dạng Prometheus exposition format cho endpoint /metrics."""
+    return generate_latest(), CONTENT_TYPE_LATEST

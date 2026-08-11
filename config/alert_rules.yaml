@@ -1,19 +1,54 @@
-alerts:
-  - name: TODO_alert_1
-    severity: TODO
-    condition: TODO
-    type: symptom-based
-    owner: TODO
-    runbook: docs/alerts.md#alert-1
-  - name: TODO_alert_2
-    severity: TODO
-    condition: TODO
-    type: symptom-based
-    owner: TODO
-    runbook: docs/alerts.md#alert-2
-  - name: TODO_alert_3
-    severity: TODO
-    condition: TODO
-    type: symptom-based
-    owner: TODO
-    runbook: docs/alerts.md#alert-3
+# Alert rules dạng Prometheus. Cả thư mục config/ được mount vào Prometheus tại
+# /etc/prometheus/lab/, nên file này nằm ở /etc/prometheus/lab/alert_rules.yaml
+# (xem config/prometheus.yml và docker-compose.yml).
+#
+# `expr: vector(0) > 1` là placeholder hợp lệ về cú pháp nên Prometheus vẫn khởi
+# động được, nhưng luôn trả về vector rỗng nên alert không bao giờ fire. Thay
+# bằng PromQL thật dựa trên metric trong app/metrics.py và threshold trong
+# config/slo.yaml.
+#
+# Prometheus fire alert cho MỌI sample mà expr trả về, không so sánh với 0. Vì
+# vậy expr phải là một phép so sánh lọc bớt, ví dụ `... > 3`, chứ không phải một
+# biểu thức luôn có kết quả.
+#
+# Kiểm tra sau khi sửa:
+#   python scripts/validate_dashboard.py --alerts
+#   docker compose exec prometheus promtool check rules /etc/prometheus/lab/alert_rules.yaml
+#   docker compose restart prometheus
+
+groups:
+  - name: day13-ai-observability
+    interval: 30s
+    rules:
+      # Gợi ý: triệu chứng latency. So p95 với objective trong config/slo.yaml.
+      - alert: TODO_alert_1_latency
+        expr: vector(0) > 1
+        for: 5m
+        labels:
+          severity: TODO
+          owner: TODO
+        annotations:
+          summary: TODO — mô tả ảnh hưởng tới người dùng, không mô tả implementation
+          runbook_url: docs/alerts.md#alert-1
+
+      # Gợi ý: triệu chứng error rate. Nhớ cả tử số lẫn mẫu số.
+      - alert: TODO_alert_2_error_rate
+        expr: vector(0) > 1
+        for: 5m
+        labels:
+          severity: TODO
+          owner: TODO
+        annotations:
+          summary: TODO — mô tả ảnh hưởng tới người dùng, không mô tả implementation
+          runbook_url: docs/alerts.md#alert-2
+
+      # Gợi ý: triệu chứng cost hoặc token. Dùng increase() trên counter.
+      - alert: TODO_alert_3_cost
+        expr: vector(0) > 1
+        for: 15m
+        labels:
+          severity: TODO
+          owner: TODO
+        annotations:
+          summary: TODO — mô tả ảnh hưởng tới người dùng, không mô tả implementation
+          runbook_url: docs/alerts.md#alert-3

@@ -74,6 +74,8 @@ class LabAgent:
         )
 
         metrics.record_request(
+            feature=feature,
+            model=self.model,
             latency_ms=latency_ms,
             cost_usd=cost_usd,
             tokens_in=response.usage.input_tokens,

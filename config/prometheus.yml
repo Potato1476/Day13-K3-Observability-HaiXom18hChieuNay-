@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    lab: day13-observability
+
+rule_files:
+  - /etc/prometheus/lab/alert_rules.yaml
+
+scrape_configs:
+  # API của lab chạy trên máy host (uvicorn), không chạy trong Docker.
+  # host.docker.internal được map sang host-gateway trong docker-compose.yml.
+  - job_name: day13-lab-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+        labels:
+          service: api
+          env: dev
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
